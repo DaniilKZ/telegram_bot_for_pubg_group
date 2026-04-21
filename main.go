@@ -1,2 +1,6 @@
-package Telegram_Bot_Pubg_Group
-https://github.com/DaniilKZ/telegram_bot_for_pubg_group.git
+package main
+
+func main() {
+	print("hello world")
+
+}
