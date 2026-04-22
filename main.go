@@ -109,7 +109,8 @@ var morningMessages = [7][4]string{
 
 // sendMorning — 10:00 — сообщение по дню недели, вариант по номеру недели
 func sendMorning(bot *tgbotapi.BotAPI, chatID int64) {
-	loc, _ := time.LoadLocation("Asia/Almaty")
+
+	var loc = time.FixedZone("UTC+5", 5*60*60)
 	now := time.Now().In(loc)
 
 	day := int(now.Weekday()) // 0–6
@@ -152,38 +153,48 @@ type scheduledMessage struct {
 }
 
 func scheduler(bot *tgbotapi.BotAPI) {
-	loc, err := time.LoadLocation("Asia/Almaty")
-	if err != nil {
-		loc = time.FixedZone("UTC+5", 5*60*60)
-	}
+
+	var loc = time.FixedZone("UTC+5", 5*60*60)
+
+	// 🔹 ЛОГ ТЕКУЩЕГО ВРЕМЕНИ ПРИ СТАРТЕ
+	startNow := time.Now().In(loc)
+	log.Printf("[INIT] текущее время: %s (%v)", startNow.Format("2006-01-02 15:04:05"), startNow.Location())
 
 	chatIDStr := os.Getenv("CHAT_ID")
 	if chatIDStr == "" {
 		log.Println("CHAT_ID не задан — планировщик отключён")
 		return
 	}
+
 	var chatID int64
 	fmt.Sscanf(chatIDStr, "%d", &chatID)
 
-	// Расписание — меняй время здесь
 	schedule := []scheduledMessage{
 		{hour: 10, minute: 0, send: sendMorning, label: "morning"},
-		{hour: 15, minute: 0, send: sendLunch, label: "lunch"},
-		{hour: 20, minute: 0, send: sendEvening, label: "evening"},
+		{hour: 13, minute: 0, send: sendLunch, label: "lunch"},
+		{hour: 21, minute: 10, send: sendEvening, label: "evening"},
 	}
 
 	for _, s := range schedule {
 		s := s
+
 		go func() {
 			for {
 				now := time.Now().In(loc)
+
+				now = time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), 0, 0, loc)
 				next := time.Date(now.Year(), now.Month(), now.Day(), s.hour, s.minute, 0, 0, loc)
+
 				if !now.Before(next) {
 					next = next.Add(24 * time.Hour)
+					log.Printf("[%s] перенос на завтра: %s", s.label, next.Format("2006-01-02 15:04:05"))
 				}
-				log.Printf("[%s] следующая отправка через %v", s.label, next.Sub(now))
-				time.Sleep(time.Until(next))
+
+				wait := time.Until(next)
+
+				time.Sleep(wait)
 				s.send(bot, chatID)
+				time.Sleep(time.Minute)
 			}
 		}()
 	}
@@ -269,31 +280,31 @@ func main() {
 		chatID := msg.Chat.ID
 
 		// /test — прогнать все три сообщения сразу
-		/*		if msg.IsCommand() && msg.Command() == "test" {
-				var targetID int64
-				fmt.Sscanf(os.Getenv("CHAT_ID"), "%d", &targetID)
-				if targetID == 0 {
-					bot.Send(tgbotapi.NewMessage(chatID, "❌ CHAT_ID не задан в .env"))
-				} else {
-					sendMorning(bot, targetID)
-					time.Sleep(500 * time.Millisecond)
-					sendLunch(bot, targetID)
-					time.Sleep(500 * time.Millisecond)
-					sendEvening(bot, targetID)
-					bot.Send(tgbotapi.NewMessage(chatID, "✅ Все три сообщения отправлены"))
-				}
-			}*/
+		if msg.IsCommand() && msg.Command() == "test" {
+			var targetID int64
+			fmt.Sscanf(os.Getenv("CHAT_ID"), "%d", &targetID)
+			if targetID == 0 {
+				bot.Send(tgbotapi.NewMessage(chatID, "❌ CHAT_ID не задан в .env"))
+			} else {
+				sendMorning(bot, targetID)
+				time.Sleep(500 * time.Millisecond)
+				sendLunch(bot, targetID)
+				time.Sleep(500 * time.Millisecond)
+				sendEvening(bot, targetID)
+				bot.Send(tgbotapi.NewMessage(chatID, "✅ Все три сообщения отправлены"))
+			}
+		}
 
 		// /quote — цитата вручную
-		/*		if msg.IsCommand() && msg.Command() == "quote" {
-				quote, author, err := fetchQuote()
-				if err != nil {
-					bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
-				} else {
-					text := fmt.Sprintf("\u201c%s\u201d\n\n© %s", quote, author)
-					bot.Send(tgbotapi.NewMessage(chatID, text))
-				}
-			}*/
+		if msg.IsCommand() && msg.Command() == "quote" {
+			quote, author, err := fetchQuote()
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
+			} else {
+				text := fmt.Sprintf("\u201c%s\u201d\n\n© %s", quote, author)
+				bot.Send(tgbotapi.NewMessage(chatID, text))
+			}
+		}
 
 		// /help — кнопка-ловушка
 		if msg.IsCommand() && msg.Command() == "help" {
