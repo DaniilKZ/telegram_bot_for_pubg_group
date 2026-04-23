@@ -1,0 +1,38 @@
+
+
+name: Bot Cron Jobs
+on:
+  schedule:
+    - cron: '52 6 * * *'   # 11:52 Алматы (UTC+5) — ТЕСТ
+    - cron: '0 5 * * *'    # 10:00 Алматы — morning
+    - cron: '0 8 * * *'    # 13:00 Алматы — lunch
+    - cron: '0 15 * * *'   # 20:00 Алматы — evening
+
+jobs:
+  morning-test:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '52 6 * * *'
+    steps:
+      - name: Trigger morning (TEST 11:52)
+        run: curl -v https://telegram-bot-for-pubg-group.vercel.app/api/cron-morning
+
+  morning:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 5 * * *'
+    steps:
+      - name: Trigger morning
+        run: curl https://telegram-bot-for-pubg-group.vercel.app/api/cron-morning
+
+  lunch:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 8 * * *'
+    steps:
+      - name: Trigger lunch
+        run: curl https://telegram-bot-for-pubg-group.vercel.app/api/cron-lunch
+
+  evening:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 15 * * *'
+    steps:
+      - name: Trigger evening
+        run: curl https://telegram-bot-for-pubg-group.vercel.app/api/cron-evening
