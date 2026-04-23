@@ -1,8 +1,7 @@
 name: Bot Cron Jobs
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '20 12 * * *'   # 12:10 Алматы (UTC+5) — ТЕСТ
+  schedule: 
     - cron: '0 5 * * *'    # 10:00 Алматы — morning
     - cron: '0 8 * * *'    # 13:00 Алматы — lunch
     - cron: '0 15 * * *'   # 20:00 Алматы — evening
