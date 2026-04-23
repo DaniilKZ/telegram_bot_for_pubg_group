@@ -2,7 +2,11 @@
   "crons": [
     {
       "path": "/api/cron-morning",
-      "schedule": "0 5 * * *"
+      "schedule": "40 6 * * *"
+    },
+    {
+      "path": "/api/cron-morning",
+      "schedule": "42 6 * * *"
     },
     {
       "path": "/api/cron-lunch",
