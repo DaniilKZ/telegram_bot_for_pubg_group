@@ -1,37 +1,39 @@
 name: Bot Cron Jobs
 on:
-  workflow_dispatch:  # ← добавь эту строку для ручного запуска
+  workflow_dispatch:  # ручной запуск
   schedule:
-    - cron: '56 6 * * *'   # 11:52 Алматы (UTC+5) — ТЕСТ
+    - cron: '0 7 * * *'   # 11:52 Алматы — ТЕСТ
     - cron: '0 5 * * *'    # 10:00 Алматы — morning
     - cron: '0 8 * * *'    # 13:00 Алматы — lunch
     - cron: '0 15 * * *'   # 20:00 Алматы — evening
 
 jobs:
-  morning-test:
+  trigger:
     runs-on: ubuntu-latest
-    if: github.event.schedule == '52 6 * * *'
     steps:
-      - name: Trigger morning (TEST 11:52)
-        run: curl -v https://telegram-bot-for-pubg-group.vercel.app/api/cron-morning
+      - name: Текущее время UTC
+        run: date -u
 
-  morning:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '0 5 * * *'
-    steps:
-      - name: Trigger morning
-        run: curl https://telegram-bot-for-pubg-group.vercel.app/api/cron-morning
+      - name: Текущее время Алматы (UTC+5)
+        run: TZ=Asia/Almaty date
 
-  lunch:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '0 8 * * *'
-    steps:
-      - name: Trigger lunch
-        run: curl https://telegram-bot-for-pubg-group.vercel.app/api/cron-lunch
+      - name: Определяем какой cron сработал
+        run: echo "Schedule = '${{ github.event.schedule }}'"
 
-  evening:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '0 15 * * *'
-    steps:
-      - name: Trigger evening
-        run: curl https://telegram-bot-for-pubg-group.vercel.app/api/cron-evening
+      - name: Morning (10:00 Алматы)
+        if: github.event.schedule == '0 5 * * *' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "Вызываю morning..."
+          curl -s -o /dev/null -w "HTTP статус: %{http_code}" https://telegram-bot-for-pubg-group.vercel.app/api/cron-morning
+
+      - name: Lunch (13:00 Алматы)
+        if: github.event.schedule == '0 8 * * *'
+        run: |
+          echo "Вызываю lunch..."
+          curl -s -o /dev/null -w "HTTP статус: %{http_code}" https://telegram-bot-for-pubg-group.vercel.app/api/cron-lunch
+
+      - name: Evening (20:00 Алматы)
+        if: github.event.schedule == '0 15 * * *'
+        run: |
+          echo "Вызываю evening..."
+          curl -s -o /dev/null -w "HTTP статус: %{http_code}" https://telegram-bot-for-pubg-group.vercel.app/api/cron-evening
