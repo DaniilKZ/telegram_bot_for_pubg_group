@@ -1,9 +1,8 @@
-
-
 name: Bot Cron Jobs
 on:
+  workflow_dispatch:  # ← добавь эту строку для ручного запуска
   schedule:
-    - cron: '52 6 * * *'   # 11:52 Алматы (UTC+5) — ТЕСТ
+    - cron: '56 6 * * *'   # 11:52 Алматы (UTC+5) — ТЕСТ
     - cron: '0 5 * * *'    # 10:00 Алматы — morning
     - cron: '0 8 * * *'    # 13:00 Алматы — lunch
     - cron: '0 15 * * *'   # 20:00 Алматы — evening
