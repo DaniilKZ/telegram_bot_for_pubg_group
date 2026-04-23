@@ -2,7 +2,7 @@ name: Bot Cron Jobs
 on:
   workflow_dispatch:
   schedule:
-    - cron: '10 7 * * *'   # 12:10 Алматы (UTC+5) — ТЕСТ
+    - cron: '20 12 * * *'   # 12:10 Алматы (UTC+5) — ТЕСТ
     - cron: '0 5 * * *'    # 10:00 Алматы — morning
     - cron: '0 8 * * *'    # 13:00 Алматы — lunch
     - cron: '0 15 * * *'   # 20:00 Алматы — evening
@@ -21,7 +21,7 @@ jobs:
         run: echo "Schedule = '${{ github.event.schedule }}'"
 
       - name: Morning TEST (12:10 Алматы)
-        if: github.event.schedule == '10 7 * * *' || github.event_name == 'workflow_dispatch'
+        if: github.event.schedule == '20 12 * * *' 
         run: |
           curl -s -o /dev/null -w "HTTP статус: %{http_code}\n" https://telegram-bot-for-pubg-group.vercel.app/api/cron-morning
 
