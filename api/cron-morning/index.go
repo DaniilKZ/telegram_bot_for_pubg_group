@@ -1,4 +1,4 @@
-package handler
+package cron_morning
 
 import (
 	"fmt"
