@@ -9,6 +9,10 @@
       "schedule": "42 6 * * *"
     },
     {
+      "path": "/api/cron-morning",
+      "schedule": "36 6 * * *"
+    },
+    {
       "path": "/api/cron-lunch",
       "schedule": "0 8 * * *"
     },
