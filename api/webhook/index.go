@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"tgbot/api/_shared"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"tgbot/shared"
 )
 
 func Handler(w http.ResponseWriter, r *http.Request) {
@@ -17,7 +17,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bot, err := shared.NewBot()
+	bot, err := _shared.NewBot()
 	if err != nil {
 		log.Printf("[webhook] ❌ бот: %v", err)
 		http.Error(w, err.Error(), 500)
@@ -60,7 +60,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// /test
 	if msg.IsCommand() && msg.Command() == "test" {
-		targetID, err := shared.ChatID()
+		targetID, err := _shared.ChatID()
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ CHAT_ID не задан в env"))
 		} else {
@@ -69,21 +69,21 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			day := int(now.Weekday())
 			_, week := now.ISOWeek()
 
-			shared.Send(bot, targetID, shared.MorningMessages[day][week%4])
+			_shared.Send(bot, targetID, _shared.MorningMessages[day][week%4])
 
-			quote, author, err := shared.FetchQuote()
+			quote, author, err := _shared.FetchQuote()
 			if err == nil {
-				shared.Send(bot, targetID, fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", quote, author))
+				_shared.Send(bot, targetID, fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", quote, author))
 			}
 
-			shared.Send(bot, targetID, "🌙 День подходит к концу!\n\nНадеемся, он был продуктивным и наполненным 😊\nОтдыхайте, завтра будет новый день — желаем всем спокойного вечера и хорошего отдыха 🌟")
+			_shared.Send(bot, targetID, "🌙 День подходит к концу!\n\nНадеемся, он был продуктивным и наполненным 😊\nОтдыхайте, завтра будет новый день — желаем всем спокойного вечера и хорошего отдыха 🌟")
 			bot.Send(tgbotapi.NewMessage(chatID, "✅ Все три сообщения отправлены"))
 		}
 	}
 
 	// /quote
 	if msg.IsCommand() && msg.Command() == "quote" {
-		quote, author, err := shared.FetchQuote()
+		quote, author, err := _shared.FetchQuote()
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
 		} else {

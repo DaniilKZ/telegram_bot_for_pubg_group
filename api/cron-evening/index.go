@@ -1,24 +1,23 @@
-package cron_evening
+package handler
 
 import (
 	"fmt"
 	"log"
 	"net/http"
-
-	"tgbot/shared"
+	"tgbot/api/_shared"
 )
 
 func Handler(w http.ResponseWriter, r *http.Request) {
 	log.Println("[evening] cron запущен")
 
-	bot, err := shared.NewBot()
+	bot, err := _shared.NewBot()
 	if err != nil {
 		log.Printf("[evening] ❌ бот: %v", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	chatID, err := shared.ChatID()
+	chatID, err := _shared.ChatID()
 	if err != nil {
 		log.Printf("[evening] ❌ chatID: %v", err)
 		http.Error(w, err.Error(), 500)
@@ -26,7 +25,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	text := "🌙 День подходит к концу!\n\nНадеемся, он был продуктивным и наполненным 😊\nОтдыхайте, завтра будет новый день — желаем всем спокойного вечера и хорошего отдыха 🌟"
-	if err := shared.Send(bot, chatID, text); err != nil {
+	if err := _shared.Send(bot, chatID, text); err != nil {
 		log.Printf("[evening] ❌ отправка: %v", err)
 		http.Error(w, err.Error(), 500)
 		return
