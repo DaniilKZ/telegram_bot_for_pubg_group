@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -107,6 +109,60 @@ func fetchQuote() (string, string, error) {
 	}
 	return result.QuoteText, result.QuoteAuthor, nil
 }
+func fetchCatFact() (string, error) {
+	// Получаем факт
+	resp, err := http.Get("https://catfact.ninja/fact")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Fact string `json:"fact"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	// Переводим через Google Translate (бесплатный unofficial API)
+	url := fmt.Sprintf(
+		"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t&q=%s",
+		url.QueryEscape(result.Fact),
+	)
+	tresp, err := http.Get(url)
+	if err != nil {
+		log.Printf("[cat] ⚠️ перевод не удался: %v, возвращаю оригинал", err)
+		return result.Fact, nil
+	}
+	defer tresp.Body.Close()
+	log.Printf("[cat] translate статус: %s", tresp.Status)
+
+	// Ответ Google: [[["перевод","оригинал",...],...],...]
+	// Структура: raw[0] = массив частей, каждая часть [0] = перевод
+	var raw []interface{}
+	if err := json.NewDecoder(tresp.Body).Decode(&raw); err != nil {
+		return result.Fact, nil
+	}
+
+	// Собираем части перевода из raw[0][N][0]
+	translated := ""
+	if sentences, ok := raw[0].([]interface{}); ok {
+		for _, sentence := range sentences {
+			if parts, ok := sentence.([]interface{}); ok && len(parts) >= 1 {
+				if text, ok := parts[0].(string); ok && text != "" {
+					translated += text
+				}
+			}
+		}
+	}
+
+	if translated == "" {
+		log.Printf("[cat] ⚠️ перевод пустой, возвращаю оригинал")
+		return result.Fact, nil
+	}
+	log.Printf("[cat] ✅ перевод: %q", translated)
+	return translated, nil
+}
 
 // -------------------------------------------------------
 // Handlers
@@ -167,6 +223,35 @@ func handleLunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[lunch] ✅ автор=%q", author)
+	fmt.Fprintln(w, "ok")
+}
+
+func handleCat(w http.ResponseWriter, r *http.Request) {
+	log.Println("[cat] cron вызван")
+	bot, err := getBot()
+	if err != nil {
+		log.Printf("[cat] ❌ бот: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	chatID, err := getChatID()
+	if err != nil {
+		log.Printf("[cat] ❌ chatID: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	catFact, err := fetchCatFact()
+	if err != nil {
+		log.Printf("[cat] ❌ факт: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	text := fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", catFact)
+	if err := sendText(bot, chatID, text); err != nil {
+		log.Printf("[cat] ❌ отправка: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	fmt.Fprintln(w, "ok")
 }
 
@@ -281,6 +366,19 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 		bot.Send(reply)
 	}
 
+	// /cat
+	if msg.IsCommand() && msg.Command() == "cat" {
+		log.Printf("[/cat] от @%s", msg.From.UserName)
+		fact, err := fetchCatFact()
+		if err != nil {
+			log.Printf("[/cat] ❌ %v", err)
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о кошках:\n\n"+fact))
+			log.Printf("[/cat] ✅ отправлено")
+		}
+	}
+
 	fmt.Fprintln(w, "ok")
 }
 
@@ -288,15 +386,137 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 // main
 // -------------------------------------------------------
 
+// processMessage — общая логика обработки команд
+func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+	chatID := msg.Chat.ID
+	log.Printf("[msg] @%s chatID=%d: %q", msg.From.UserName, chatID, msg.Text)
+
+	// /quote
+	if msg.IsCommand() && msg.Command() == "quote" {
+		q, a, err := fetchQuote()
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("\u201c%s\u201d\n\n© %s", q, a)))
+		}
+	}
+
+	// /help
+	if msg.IsCommand() && msg.Command() == "help" {
+		username := msg.From.FirstName
+		if msg.From.UserName != "" {
+			username = "@" + msg.From.UserName
+		}
+		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf("👋 Привет, %s!\n\n⚠️ Внизу кнопка — НЕ НАЖИМАЙ!", username))
+		reply.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("🚫 НЕ НАЖИМАЙ СЮДА !", "dont_click"),
+			),
+		)
+		bot.Send(reply)
+	}
+
+	// /cat
+	if msg.IsCommand() && msg.Command() == "cat" {
+		log.Printf("[/cat] от @%s", msg.From.UserName)
+		fact, err := fetchCatFact()
+		if err != nil {
+			log.Printf("[/cat] ❌ %v", err)
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о кошках:\n\n"+fact))
+			log.Printf("[/cat] ✅ отправлено")
+		}
+	}
+}
+
+// runPolling — режим для локальной разработки (LOCAL=true)
+func runPolling(bot *tgbotapi.BotAPI) {
+	log.Println("[polling] 🔄 режим polling запущен (локальная разработка)")
+
+	// Удаляем webhook чтобы polling работал
+	bot.Request(tgbotapi.DeleteWebhookConfig{})
+
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+	updates := bot.GetUpdatesChan(u)
+
+	for update := range updates {
+		if update.CallbackQuery != nil {
+			cb := update.CallbackQuery
+			if cb.Data == "dont_click" {
+				bot.Request(tgbotapi.NewCallback(cb.ID, "😈 Я же сказал не нажимать!"))
+				bot.Request(tgbotapi.NewEditMessageReplyMarkup(
+					cb.Message.Chat.ID, cb.Message.MessageID,
+					tgbotapi.InlineKeyboardMarkup{
+						InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
+							{tgbotapi.NewInlineKeyboardButtonData("💀 Ты нажал...", "dont_click")},
+						},
+					},
+				))
+			}
+			continue
+		}
+		if update.Message == nil {
+			continue
+		}
+		processMessage(bot, update.Message)
+	}
+}
+
+func loadEnv(filename string) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		parts := splitOnce(line, '=')
+		if parts[0] != "" && parts[1] != "" {
+			os.Setenv(parts[0], parts[1])
+		}
+	}
+}
+
+func splitOnce(s string, sep byte) [2]string {
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep {
+			return [2]string{s[:i], s[i+1:]}
+		}
+	}
+	return [2]string{s, ""}
+}
+
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 	log.Println("=== БОТ ЗАПУСКАЕТСЯ ===")
+
+	loadEnv(".env")
+	bot, err := getBot()
+	if err != nil {
+		log.Fatalf("[main] ❌ бот: %v", err)
+	}
+	log.Printf("[main] ✅ бот: @%s", bot.Self.UserName)
+
+	// LOCAL=true — polling для локальной разработки
+	// LOCAL=false (или не задан) — webhook для Vercel
+	if os.Getenv("LOCAL") == "true" {
+		runPolling(bot)
+		return
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/webhook", handleWebhook)
 	mux.HandleFunc("/api/cron-morning", handleMorning)
 	mux.HandleFunc("/api/cron-lunch", handleLunch)
 	mux.HandleFunc("/api/cron-evening", handleEvening)
+	mux.HandleFunc("/api/cron-cat", handleCat)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "Bot is running")
 	})
