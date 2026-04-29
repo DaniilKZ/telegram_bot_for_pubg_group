@@ -4,14 +4,53 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
+
+type rateLimiter struct {
+	mu       sync.Mutex
+	requests map[int64][]time.Time
+}
+
+var limiter = &rateLimiter{
+	requests: make(map[int64][]time.Time),
+}
+
+/*Проверка на лимиты */
+
+func (r *rateLimiter) allow(userID int64, maxRequests int, period time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-period)
+
+	fresh := r.requests[userID][:0]
+	for _, t := range r.requests[userID] {
+		if t.After(cutoff) {
+			fresh = append(fresh, t)
+		}
+	}
+	r.requests[userID] = fresh
+
+	if len(fresh) >= maxRequests {
+		return false
+	}
+	r.requests[userID] = append(r.requests[userID], now)
+	return true
+}
+
+/*Проверка на лимиты */
 
 // -------------------------------------------------------
 // Массив утренних сообщений [7 дней][4 варианта]
@@ -109,6 +148,7 @@ func fetchQuote() (string, string, error) {
 	}
 	return result.QuoteText, result.QuoteAuthor, nil
 }
+
 func fetchCatFact() (string, error) {
 	// Получаем факт
 	resp, err := http.Get("https://catfact.ninja/fact")
@@ -162,6 +202,58 @@ func fetchCatFact() (string, error) {
 	}
 	log.Printf("[cat] ✅ перевод: %q", translated)
 	return translated, nil
+}
+
+// fetchMeme — парсит memify.ru и возвращает рандомную картинку
+func fetchMeme() (string, error) {
+	resp, err := http.Get("https://www.memify.ru/highfive/")
+	if err != nil {
+		return "", fmt.Errorf("http.Get: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read body: %w", err)
+	}
+
+	// Ищем все img src с nvcdn.memify.ru
+	re := regexp.MustCompile(`src="(https://www\.nvcdn\.memify\.ru/[^"]+\.(?:jpg|jpeg|png|gif))"`)
+	matches := re.FindAllStringSubmatch(string(body), -1)
+
+	if len(matches) == 0 {
+		return "", fmt.Errorf("картинки не найдены")
+	}
+
+	// Рандомная картинка из найденных
+	idx := rand.Intn(len(matches))
+	url := matches[idx][1]
+	log.Printf("[meme] найдено %d картинок, выбрана #%d: %s", len(matches), idx, url)
+	return url, nil
+}
+
+// downloadImage — скачивает картинку с заголовками браузера
+func downloadImage(url string) ([]byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Заголовки чтобы сайт не блокировал запрос
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Referer", "https://www.memify.ru/")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("статус: %s", resp.Status)
+	}
+
+	return io.ReadAll(resp.Body)
 }
 
 // -------------------------------------------------------
@@ -341,6 +433,35 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// /meme — рандомный мем с memify.ru
+	if msg.IsCommand() && msg.Command() == "meme" {
+		log.Printf("[/meme] от @%s", msg.From.UserName)
+		imgURL, err := fetchMeme()
+		if err != nil {
+			log.Printf("[/meme] ❌ %v", err)
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить мем"))
+		} else {
+			// Скачиваем картинку сами — Telegram не может достучаться до nvcdn
+			imgData, err := downloadImage(imgURL)
+			if err != nil {
+				log.Printf("[/meme] ❌ скачивание: %v", err)
+				bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось загрузить картинку"))
+			} else {
+				photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{
+					Name:  "meme.jpg",
+					Bytes: imgData,
+				})
+				photo.Caption = "😂 Мем дня!"
+				if _, err := bot.Send(photo); err != nil {
+					log.Printf("[/meme] ❌ отправка: %v", err)
+					bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка отправки фото"))
+				} else {
+					log.Printf("[/meme] ✅ отправлено как фото")
+				}
+			}
+		}
+	}
+
 	// /quote
 	if msg.IsCommand() && msg.Command() == "quote" {
 		q, a, err := fetchQuote()
@@ -389,7 +510,15 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 // processMessage — общая логика обработки команд
 func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
+	userID := msg.From.ID
 	log.Printf("[msg] @%s chatID=%d: %q", msg.From.UserName, chatID, msg.Text)
+
+	// Лимит: не более 5 команд в минуту на пользователя
+	if msg.IsCommand() && !limiter.allow(userID, 3, time.Minute) {
+		log.Printf("[limiter] ⛔ @%s превысил лимит", msg.From.UserName)
+		bot.Send(tgbotapi.NewMessage(chatID, "⏳ Слишком много запросов. Подожди минуту."))
+		return
+	}
 
 	// /quote
 	if msg.IsCommand() && msg.Command() == "quote" {
@@ -414,6 +543,35 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			),
 		)
 		bot.Send(reply)
+	}
+
+	// /meme — рандомный мем с memify.ru
+	if msg.IsCommand() && msg.Command() == "meme" {
+		log.Printf("[/meme] от @%s", msg.From.UserName)
+		imgURL, err := fetchMeme()
+		if err != nil {
+			log.Printf("[/meme] ❌ %v", err)
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить мем"))
+		} else {
+			// Скачиваем картинку сами — Telegram не может достучаться до nvcdn
+			imgData, err := downloadImage(imgURL)
+			if err != nil {
+				log.Printf("[/meme] ❌ скачивание: %v", err)
+				bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось загрузить картинку"))
+			} else {
+				photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{
+					Name:  "meme.jpg",
+					Bytes: imgData,
+				})
+				photo.Caption = "😂 Мем дня!"
+				if _, err := bot.Send(photo); err != nil {
+					log.Printf("[/meme] ❌ отправка: %v", err)
+					bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка отправки фото"))
+				} else {
+					log.Printf("[/meme] ✅ отправлено как фото")
+				}
+			}
+		}
 	}
 
 	// /cat
