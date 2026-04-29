@@ -346,7 +346,7 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
-		hour: 18, minute: 0, name: "meme",
+		hour: 19, minute: 0, name: "meme",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			sendMeme(bot, chatID)
 		},
