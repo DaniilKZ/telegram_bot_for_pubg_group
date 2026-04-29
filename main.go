@@ -246,7 +246,7 @@ func handleCat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	text := fmt.Sprintf("🐈 Факт о котиках: %s", catFact)
+	text := fmt.Sprintf("🐈 Факт о котиках:\n\n %s", catFact)
 	if err := sendText(bot, chatID, text); err != nil {
 		log.Printf("[cat] ❌ отправка: %v", err)
 		http.Error(w, err.Error(), 500)
