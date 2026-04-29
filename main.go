@@ -246,7 +246,7 @@ func handleCat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	text := fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", catFact)
+	text := fmt.Sprintf("🐈 Факт о котиках: %s", catFact)
 	if err := sendText(bot, chatID, text); err != nil {
 		log.Printf("[cat] ❌ отправка: %v", err)
 		http.Error(w, err.Error(), 500)
@@ -374,7 +374,7 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[/cat] ❌ %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
 		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о кошках:\n\n"+fact))
+			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
 			log.Printf("[/cat] ✅ отправлено")
 		}
 	}
@@ -424,7 +424,7 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			log.Printf("[/cat] ❌ %v", err)
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
 		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о кошках:\n\n"+fact))
+			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
 			log.Printf("[/cat] ✅ отправлено")
 		}
 	}
