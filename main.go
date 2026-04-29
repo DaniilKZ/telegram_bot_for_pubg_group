@@ -17,6 +17,10 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+// -------------------------------------------------------
+// Rate Limiter
+// -------------------------------------------------------
+
 type rateLimiter struct {
 	mu       sync.Mutex
 	requests map[int64][]time.Time
@@ -25,8 +29,6 @@ type rateLimiter struct {
 var limiter = &rateLimiter{
 	requests: make(map[int64][]time.Time),
 }
-
-/*Проверка на лимиты */
 
 func (r *rateLimiter) allow(userID int64, maxRequests int, period time.Duration) bool {
 	r.mu.Lock()
@@ -50,7 +52,29 @@ func (r *rateLimiter) allow(userID int64, maxRequests int, period time.Duration)
 	return true
 }
 
-/*Проверка на лимиты */
+// cronGuard — защита от повторных запросов
+type cronGuard struct {
+	mu      sync.Mutex
+	lastRun map[string]time.Time
+}
+
+var guard = &cronGuard{
+	lastRun: make(map[string]time.Time),
+}
+
+func (g *cronGuard) allow(name string, minInterval time.Duration) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if last, ok := g.lastRun[name]; ok {
+		if time.Since(last) < minInterval {
+			log.Printf("[%s] ⛔ слишком часто, пропускаю (последний: %v назад)", name, time.Since(last).Round(time.Second))
+			return false
+		}
+	}
+	g.lastRun[name] = time.Now()
+	return true
+}
 
 // -------------------------------------------------------
 // Массив утренних сообщений [7 дней][4 варианта]
@@ -150,7 +174,6 @@ func fetchQuote() (string, string, error) {
 }
 
 func fetchCatFact() (string, error) {
-	// Получаем факт
 	resp, err := http.Get("https://catfact.ninja/fact")
 	if err != nil {
 		return "", err
@@ -164,47 +187,51 @@ func fetchCatFact() (string, error) {
 		return "", err
 	}
 
-	// Переводим через Google Translate (бесплатный unofficial API)
-	url := fmt.Sprintf(
-		"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t&q=%s",
-		url.QueryEscape(result.Fact),
-	)
-	tresp, err := http.Get(url)
+	translated, err := translateToRu(result.Fact)
 	if err != nil {
-		log.Printf("[cat] ⚠️ перевод не удался: %v, возвращаю оригинал", err)
 		return result.Fact, nil
 	}
-	defer tresp.Body.Close()
-	log.Printf("[cat] translate статус: %s", tresp.Status)
+	return translated, nil
+}
 
-	// Ответ Google: [[["перевод","оригинал",...],...],...]
-	// Структура: raw[0] = массив частей, каждая часть [0] = перевод
+func translateToRu(text string) (string, error) {
+	reqURL := fmt.Sprintf(
+		"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t&q=%s",
+		url.QueryEscape(text),
+	)
+	resp, err := http.Get(reqURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	log.Printf("[translate] статус: %s", resp.Status)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("статус: %s", resp.Status)
+	}
+
 	var raw []interface{}
-	if err := json.NewDecoder(tresp.Body).Decode(&raw); err != nil {
-		return result.Fact, nil
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return "", err
 	}
 
-	// Собираем части перевода из raw[0][N][0]
 	translated := ""
 	if sentences, ok := raw[0].([]interface{}); ok {
 		for _, sentence := range sentences {
 			if parts, ok := sentence.([]interface{}); ok && len(parts) >= 1 {
-				if text, ok := parts[0].(string); ok && text != "" {
-					translated += text
+				if t, ok := parts[0].(string); ok && t != "" {
+					translated += t
 				}
 			}
 		}
 	}
 
 	if translated == "" {
-		log.Printf("[cat] ⚠️ перевод пустой, возвращаю оригинал")
-		return result.Fact, nil
+		return "", fmt.Errorf("пустой перевод")
 	}
-	log.Printf("[cat] ✅ перевод: %q", translated)
 	return translated, nil
 }
 
-// fetchMeme — парсит memify.ru и возвращает рандомную картинку
 func fetchMeme() (string, error) {
 	resp, err := http.Get("https://www.memify.ru/highfive/")
 	if err != nil {
@@ -217,7 +244,6 @@ func fetchMeme() (string, error) {
 		return "", fmt.Errorf("read body: %w", err)
 	}
 
-	// Ищем все img src с nvcdn.memify.ru
 	re := regexp.MustCompile(`src="(https://www\.nvcdn\.memify\.ru/[^"]+\.(?:jpg|jpeg|png|gif))"`)
 	matches := re.FindAllStringSubmatch(string(body), -1)
 
@@ -225,20 +251,17 @@ func fetchMeme() (string, error) {
 		return "", fmt.Errorf("картинки не найдены")
 	}
 
-	// Рандомная картинка из найденных
 	idx := rand.Intn(len(matches))
-	url := matches[idx][1]
-	log.Printf("[meme] найдено %d картинок, выбрана #%d: %s", len(matches), idx, url)
-	return url, nil
+	imgURL := matches[idx][1]
+	log.Printf("[meme] найдено %d картинок, выбрана #%d: %s", len(matches), idx, imgURL)
+	return imgURL, nil
 }
 
-// downloadImage — скачивает картинку с заголовками браузера
-func downloadImage(url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func downloadImage(imgURL string) ([]byte, error) {
+	req, err := http.NewRequest("GET", imgURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	// Заголовки чтобы сайт не блокировал запрос
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", "https://www.memify.ru/")
 
@@ -252,123 +275,221 @@ func downloadImage(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("статус: %s", resp.Status)
 	}
-
 	return io.ReadAll(resp.Body)
 }
 
+func sendMeme(bot *tgbotapi.BotAPI, chatID int64) {
+	imgURL, err := fetchMeme()
+	if err != nil {
+		log.Printf("[meme] ❌ fetchMeme: %v", err)
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить мем"))
+		return
+	}
+	imgData, err := downloadImage(imgURL)
+	if err != nil {
+		log.Printf("[meme] ❌ download: %v", err)
+		bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось загрузить картинку"))
+		return
+	}
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{Name: "meme.jpg", Bytes: imgData})
+	photo.Caption = "😂 Мем дня!"
+	if _, err := bot.Send(photo); err != nil {
+		log.Printf("[meme] ❌ отправка: %v", err)
+	} else {
+		log.Printf("[meme] ✅ отправлено")
+	}
+}
+
 // -------------------------------------------------------
-// Handlers
+// Единый Cron — один URL, всё расписание внутри
 // -------------------------------------------------------
 
-func handleMorning(w http.ResponseWriter, r *http.Request) {
-	log.Println("[morning] cron вызван")
-	bot, err := getBot()
-	if err != nil {
-		log.Printf("[morning] ❌ бот: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	chatID, err := getChatID()
-	if err != nil {
-		log.Printf("[morning] ❌ chatID: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
+type cronTask struct {
+	hour   int
+	minute int
+	name   string
+	run    func(bot *tgbotapi.BotAPI, chatID int64)
+}
+
+// Расписание — добавляй задачи сюда
+var cronSchedule = []cronTask{
+	{
+		hour: 10, minute: 0, name: "morning",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			loc := time.FixedZone("UTC+5", 5*60*60)
+			now := time.Now().In(loc)
+			day := int(now.Weekday())
+			_, week := now.ISOWeek()
+			sendText(bot, chatID, morningMessages[day][week%4])
+		},
+	},
+	{
+		hour: 13, minute: 0, name: "lunch",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			q, a, err := fetchQuote()
+			if err != nil {
+				log.Printf("[cron/lunch] ❌ %v", err)
+				return
+			}
+			sendText(bot, chatID, fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", q, a))
+		},
+	},
+	{
+		hour: 15, minute: 0, name: "cat",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			fact, err := fetchCatFact()
+			if err != nil {
+				log.Printf("[cron/cat] ❌ %v", err)
+				return
+			}
+			sendText(bot, chatID, "🐱 Факт о котиках:\n\n"+fact)
+		},
+	},
+	{
+		hour: 18, minute: 0, name: "meme",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			sendMeme(bot, chatID)
+		},
+	},
+	{
+		hour: 20, minute: 0, name: "evening",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			sendText(bot, chatID, "🌙 День подходит к концу!\n\nНадеемся, он был продуктивным и наполненным 😊\nОтдыхайте, завтра будет новый день — желаем всем спокойного вечера и хорошего отдыха 🌟")
+		},
+	},
+}
+
+func handleCron(w http.ResponseWriter, r *http.Request) {
 	loc := time.FixedZone("UTC+5", 5*60*60)
 	now := time.Now().In(loc)
-	day := int(now.Weekday())
-	_, week := now.ISOWeek()
-	text := morningMessages[day][week%4]
-	if err := sendText(bot, chatID, text); err != nil {
-		log.Printf("[morning] ❌ отправка: %v", err)
-		http.Error(w, err.Error(), 500)
+	h, m := now.Hour(), now.Minute()
+
+	log.Printf("[cron] 🕐 вызван в %02d:%02d Алматы", h, m)
+
+	// Ручной запуск конкретной задачи: /api/cron?job=morning
+	if job := r.URL.Query().Get("job"); job != "" {
+		for _, task := range cronSchedule {
+			if task.name == job {
+				bot, err := getBot()
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				chatID, err := getChatID()
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				log.Printf("[cron/%s] 🔧 ручной запуск", job)
+				task.run(bot, chatID)
+				fmt.Fprintln(w, "ok: "+job)
+				return
+			}
+		}
+		http.Error(w, "unknown job: "+job, 400)
 		return
 	}
-	log.Printf("[morning] ✅ день=%d вариант=%d", day, week%4)
-	fmt.Fprintln(w, "ok")
-}
 
-func handleLunch(w http.ResponseWriter, r *http.Request) {
-	log.Println("[lunch] cron вызван")
+	// Автоматический режим — ищем задачи по текущему времени
 	bot, err := getBot()
 	if err != nil {
-		log.Printf("[lunch] ❌ бот: %v", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	chatID, err := getChatID()
 	if err != nil {
-		log.Printf("[lunch] ❌ chatID: %v", err)
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	quote, author, err := fetchQuote()
-	if err != nil {
-		log.Printf("[lunch] ❌ цитата: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
+
+	ran := 0
+	for _, task := range cronSchedule {
+		if task.hour == h && task.minute == m {
+			if !guard.allow(task.name, 30*time.Minute) {
+				continue
+			}
+			log.Printf("[cron/%s] 🔔 совпало %02d:%02d — запускаю", task.name, h, m)
+			task.run(bot, chatID)
+			ran++
+		}
 	}
-	text := fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", quote, author)
-	if err := sendText(bot, chatID, text); err != nil {
-		log.Printf("[lunch] ❌ отправка: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
+
+	if ran == 0 {
+		log.Printf("[cron] ⏭ %02d:%02d — нет задач", h, m)
 	}
-	log.Printf("[lunch] ✅ автор=%q", author)
+
 	fmt.Fprintln(w, "ok")
 }
 
-func handleCat(w http.ResponseWriter, r *http.Request) {
-	log.Println("[cat] cron вызван")
-	bot, err := getBot()
-	if err != nil {
-		log.Printf("[cat] ❌ бот: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	chatID, err := getChatID()
-	if err != nil {
-		log.Printf("[cat] ❌ chatID: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	catFact, err := fetchCatFact()
-	if err != nil {
-		log.Printf("[cat] ❌ факт: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	text := fmt.Sprintf("🐈 Факт о котиках:\n\n %s", catFact)
-	if err := sendText(bot, chatID, text); err != nil {
-		log.Printf("[cat] ❌ отправка: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	fmt.Fprintln(w, "ok")
-}
+// -------------------------------------------------------
+// Webhook — обработка команд от пользователей
+// -------------------------------------------------------
 
-func handleEvening(w http.ResponseWriter, r *http.Request) {
-	log.Println("[evening] cron вызван")
-	bot, err := getBot()
-	if err != nil {
-		log.Printf("[evening] ❌ бот: %v", err)
-		http.Error(w, err.Error(), 500)
+func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+	chatID := msg.Chat.ID
+	userID := msg.From.ID
+	log.Printf("[msg] @%s chatID=%d: %q", msg.From.UserName, chatID, msg.Text)
+
+	// Лимит: не более 3 команд в минуту на пользователя
+	if msg.IsCommand() && !limiter.allow(userID, 3, time.Minute) {
+		log.Printf("[limiter] ⛔ @%s превысил лимит", msg.From.UserName)
+		bot.Send(tgbotapi.NewMessage(chatID, "⏳ Слишком много запросов. Подожди минуту."))
 		return
 	}
-	chatID, err := getChatID()
-	if err != nil {
-		log.Printf("[evening] ❌ chatID: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
+
+	// /test — прогнать все задачи
+	if msg.IsCommand() && msg.Command() == "test" {
+		targetID, err := getChatID()
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ CHAT_ID не задан"))
+			return
+		}
+		for _, task := range cronSchedule {
+			log.Printf("[/test] запускаю %s", task.name)
+			task.run(bot, targetID)
+		}
+		bot.Send(tgbotapi.NewMessage(chatID, "✅ Все задачи выполнены"))
 	}
-	text := "🌙 День подходит к концу!\n\nНадеемся, он был продуктивным и наполненным 😊\nОтдыхайте, завтра будет новый день — желаем всем спокойного вечера и хорошего отдыха 🌟"
-	if err := sendText(bot, chatID, text); err != nil {
-		log.Printf("[evening] ❌ отправка: %v", err)
-		http.Error(w, err.Error(), 500)
-		return
+
+	// /quote
+	if msg.IsCommand() && msg.Command() == "quote" {
+		q, a, err := fetchQuote()
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("\u201c%s\u201d\n\n© %s", q, a)))
+		}
 	}
-	log.Println("[evening] ✅ отправлено")
-	fmt.Fprintln(w, "ok")
+
+	// /meme
+	if msg.IsCommand() && msg.Command() == "meme" {
+		sendMeme(bot, chatID)
+	}
+
+	// /cat
+	if msg.IsCommand() && msg.Command() == "cat" {
+		fact, err := fetchCatFact()
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
+		} else {
+			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
+		}
+	}
+
+	// /help
+	if msg.IsCommand() && msg.Command() == "help" {
+		username := msg.From.FirstName
+		if msg.From.UserName != "" {
+			username = "@" + msg.From.UserName
+		}
+		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf("👋 Привет, %s!\n\n⚠️ Внизу кнопка — НЕ НАЖИМАЙ!", username))
+		reply.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("🚫 НЕ НАЖИМАЙ СЮДА !", "dont_click"),
+			),
+		)
+		bot.Send(reply)
+	}
 }
 
 func handleWebhook(w http.ResponseWriter, r *http.Request) {
@@ -387,7 +508,6 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inline-кнопка
 	if update.CallbackQuery != nil {
 		cb := update.CallbackQuery
 		if cb.Data == "dont_click" {
@@ -410,189 +530,16 @@ func handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg := update.Message
-	chatID := msg.Chat.ID
-	log.Printf("[webhook] @%s chatID=%d: %q", msg.From.UserName, chatID, msg.Text)
-
-	// /test
-	if msg.IsCommand() && msg.Command() == "test" {
-		targetID, err := getChatID()
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ CHAT_ID не задан"))
-		} else {
-			loc := time.FixedZone("UTC+5", 5*60*60)
-			now := time.Now().In(loc)
-			day := int(now.Weekday())
-			_, week := now.ISOWeek()
-			sendText(bot, targetID, morningMessages[day][week%4])
-			if q, a, err := fetchQuote(); err == nil {
-				sendText(bot, targetID, fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", q, a))
-			}
-			sendText(bot, targetID, "🌙 День подходит к концу!\n\nНадеемся, он был продуктивным и наполненным 😊\nОтдыхайте, завтра будет новый день — желаем всем спокойного вечера и хорошего отдыха 🌟")
-			bot.Send(tgbotapi.NewMessage(chatID, "✅ Все три сообщения отправлены"))
-		}
-	}
-
-	// /meme — рандомный мем с memify.ru
-	if msg.IsCommand() && msg.Command() == "meme" {
-		log.Printf("[/meme] от @%s", msg.From.UserName)
-		imgURL, err := fetchMeme()
-		if err != nil {
-			log.Printf("[/meme] ❌ %v", err)
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить мем"))
-		} else {
-			// Скачиваем картинку сами — Telegram не может достучаться до nvcdn
-			imgData, err := downloadImage(imgURL)
-			if err != nil {
-				log.Printf("[/meme] ❌ скачивание: %v", err)
-				bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось загрузить картинку"))
-			} else {
-				photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{
-					Name:  "meme.jpg",
-					Bytes: imgData,
-				})
-				photo.Caption = "😂 Мем дня!"
-				if _, err := bot.Send(photo); err != nil {
-					log.Printf("[/meme] ❌ отправка: %v", err)
-					bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка отправки фото"))
-				} else {
-					log.Printf("[/meme] ✅ отправлено как фото")
-				}
-			}
-		}
-	}
-
-	// /quote
-	if msg.IsCommand() && msg.Command() == "quote" {
-		q, a, err := fetchQuote()
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
-		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("\u201c%s\u201d\n\n© %s", q, a)))
-		}
-	}
-
-	// /help
-	if msg.IsCommand() && msg.Command() == "help" {
-		username := msg.From.FirstName
-		if msg.From.UserName != "" {
-			username = "@" + msg.From.UserName
-		}
-		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf("👋 Привет, %s!\n\n⚠️ Внизу кнопка — НЕ НАЖИМАЙ!", username))
-		reply.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🚫 НЕ НАЖИМАЙ СЮДА !", "dont_click"),
-			),
-		)
-		bot.Send(reply)
-	}
-
-	// /cat
-	if msg.IsCommand() && msg.Command() == "cat" {
-		log.Printf("[/cat] от @%s", msg.From.UserName)
-		fact, err := fetchCatFact()
-		if err != nil {
-			log.Printf("[/cat] ❌ %v", err)
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
-		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
-			log.Printf("[/cat] ✅ отправлено")
-		}
-	}
-
+	processMessage(bot, update.Message)
 	fmt.Fprintln(w, "ok")
 }
 
 // -------------------------------------------------------
-// main
+// Polling — локальная разработка
 // -------------------------------------------------------
 
-// processMessage — общая логика обработки команд
-func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
-	chatID := msg.Chat.ID
-	userID := msg.From.ID
-	log.Printf("[msg] @%s chatID=%d: %q", msg.From.UserName, chatID, msg.Text)
-
-	// Лимит: не более 5 команд в минуту на пользователя
-	if msg.IsCommand() && !limiter.allow(userID, 3, time.Minute) {
-		log.Printf("[limiter] ⛔ @%s превысил лимит", msg.From.UserName)
-		bot.Send(tgbotapi.NewMessage(chatID, "⏳ Слишком много запросов. Подожди минуту."))
-		return
-	}
-
-	// /quote
-	if msg.IsCommand() && msg.Command() == "quote" {
-		q, a, err := fetchQuote()
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
-		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("\u201c%s\u201d\n\n© %s", q, a)))
-		}
-	}
-
-	// /help
-	if msg.IsCommand() && msg.Command() == "help" {
-		username := msg.From.FirstName
-		if msg.From.UserName != "" {
-			username = "@" + msg.From.UserName
-		}
-		reply := tgbotapi.NewMessage(chatID, fmt.Sprintf("👋 Привет, %s!\n\n⚠️ Внизу кнопка — НЕ НАЖИМАЙ!", username))
-		reply.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("🚫 НЕ НАЖИМАЙ СЮДА !", "dont_click"),
-			),
-		)
-		bot.Send(reply)
-	}
-
-	// /meme — рандомный мем с memify.ru
-	if msg.IsCommand() && msg.Command() == "meme" {
-		log.Printf("[/meme] от @%s", msg.From.UserName)
-		imgURL, err := fetchMeme()
-		if err != nil {
-			log.Printf("[/meme] ❌ %v", err)
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить мем"))
-		} else {
-			// Скачиваем картинку сами — Telegram не может достучаться до nvcdn
-			imgData, err := downloadImage(imgURL)
-			if err != nil {
-				log.Printf("[/meme] ❌ скачивание: %v", err)
-				bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось загрузить картинку"))
-			} else {
-				photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{
-					Name:  "meme.jpg",
-					Bytes: imgData,
-				})
-				photo.Caption = "😂 Мем дня!"
-				if _, err := bot.Send(photo); err != nil {
-					log.Printf("[/meme] ❌ отправка: %v", err)
-					bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка отправки фото"))
-				} else {
-					log.Printf("[/meme] ✅ отправлено как фото")
-				}
-			}
-		}
-	}
-
-	// /cat
-	if msg.IsCommand() && msg.Command() == "cat" {
-		log.Printf("[/cat] от @%s", msg.From.UserName)
-		fact, err := fetchCatFact()
-		if err != nil {
-			log.Printf("[/cat] ❌ %v", err)
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
-		} else {
-			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
-			log.Printf("[/cat] ✅ отправлено")
-		}
-	}
-}
-
-// runPolling — режим для локальной разработки (LOCAL=true)
 func runPolling(bot *tgbotapi.BotAPI) {
-	log.Println("[polling] 🔄 режим polling запущен (локальная разработка)")
-
-	// Удаляем webhook чтобы polling работал
+	log.Println("[polling] 🔄 режим polling запущен")
 	bot.Request(tgbotapi.DeleteWebhookConfig{})
 
 	u := tgbotapi.NewUpdate(0)
@@ -621,6 +568,10 @@ func runPolling(bot *tgbotapi.BotAPI) {
 		processMessage(bot, update.Message)
 	}
 }
+
+// -------------------------------------------------------
+// ENV
+// -------------------------------------------------------
 
 func loadEnv(filename string) {
 	f, err := os.Open(filename)
@@ -651,19 +602,22 @@ func splitOnce(s string, sep byte) [2]string {
 	return [2]string{s, ""}
 }
 
+// -------------------------------------------------------
+// main
+// -------------------------------------------------------
+
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 	log.Println("=== БОТ ЗАПУСКАЕТСЯ ===")
 
 	loadEnv(".env")
+
 	bot, err := getBot()
 	if err != nil {
 		log.Fatalf("[main] ❌ бот: %v", err)
 	}
 	log.Printf("[main] ✅ бот: @%s", bot.Self.UserName)
 
-	// LOCAL=true — polling для локальной разработки
-	// LOCAL=false (или не задан) — webhook для Vercel
 	if os.Getenv("LOCAL") == "true" {
 		runPolling(bot)
 		return
@@ -671,10 +625,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/webhook", handleWebhook)
-	mux.HandleFunc("/api/cron-morning", handleMorning)
-	mux.HandleFunc("/api/cron-lunch", handleLunch)
-	mux.HandleFunc("/api/cron-evening", handleEvening)
-	mux.HandleFunc("/api/cron-cat", handleCat)
+	mux.HandleFunc("/api/cron", handleCron) // ← единый cron endpoint
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "Bot is running")
 	})
@@ -683,6 +634,6 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
-	log.Printf("Сервер запущен на :%s", port)
+	log.Printf("[main] 🌐 сервер на :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
