@@ -14,7 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"context"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/redis/go-redis/v9"
+	"strings"
 )
 
 // -------------------------------------------------------
@@ -346,9 +349,22 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
-		hour: 19, minute: 0, name: "meme",
+		hour: 18, minute: 0, name: "meme",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			sendMeme(bot, chatID)
+		},
+	},
+	{
+		hour: 11, minute: 0, name: "space",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			text, err := fetchSpaceFact()
+			if err != nil {
+				log.Printf("[cron/space] ❌ %v", err)
+				return
+			}
+			msg := tgbotapi.NewMessage(chatID, text)
+			msg.ParseMode = "Markdown"
+			bot.Send(msg)
 		},
 	},
 	{
@@ -476,6 +492,18 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		}
 	}
 
+	// /space — факт о космосе
+	if msg.IsCommand() && msg.Command() == "space" {
+		text, err := fetchSpaceFact()
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о космосе"))
+		} else {
+			msg := tgbotapi.NewMessage(chatID, text)
+			msg.ParseMode = "Markdown"
+			bot.Send(msg)
+		}
+	}
+
 	// /help
 	if msg.IsCommand() && msg.Command() == "help" {
 		username := msg.From.FirstName
@@ -600,6 +628,203 @@ func splitOnce(s string, sep byte) [2]string {
 		}
 	}
 	return [2]string{s, ""}
+}
+
+// -------------------------------------------------------
+// Redis
+// -------------------------------------------------------
+
+var redisClient *redis.Client
+var ctx = context.Background()
+
+func getRedis() *redis.Client {
+	if redisClient != nil {
+		return redisClient
+	}
+	opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
+	if err != nil {
+		log.Printf("[redis] ❌ ParseURL: %v", err)
+		return nil
+	}
+	redisClient = redis.NewClient(opt)
+	return redisClient
+}
+
+// isShown — проверяет показывался ли факт уже
+func isShown(key string) bool {
+	rdb := getRedis()
+	if rdb == nil {
+		return false
+	}
+	val, err := rdb.Get(ctx, "space:"+key).Result()
+	return err == nil && val == "shown"
+}
+
+// markShown — помечает факт как показанный
+func markShown(key string) {
+	rdb := getRedis()
+	if rdb == nil {
+		return
+	}
+	// Храним без TTL — никогда не повторяем
+	rdb.Set(ctx, "space:"+key, "shown", 0)
+	log.Printf("[redis] ✅ помечено: space:%s", key)
+}
+
+// resetShown — сбросить все показанные (когда все факты исчерпаны)
+func resetShown() {
+	rdb := getRedis()
+	if rdb == nil {
+		return
+	}
+	keys, err := rdb.Keys(ctx, "space:*").Result()
+	if err != nil {
+		return
+	}
+	if len(keys) > 0 {
+		rdb.Del(ctx, keys...)
+	}
+	log.Printf("[redis] 🔄 сброшено %d записей", len(keys))
+}
+
+// -------------------------------------------------------
+// Wikipedia Space Facts
+// -------------------------------------------------------
+
+// Список тем о космосе — русская Wikipedia
+// Используем точные названия статей (без дизамбигов)
+var spaceTopics = []string{
+	"Млечный_путь",
+	"Чёрная_дыра",
+	"Нейтронная_звезда",
+	"Сверхновая",
+	"Тёмная_материя",
+	"Тёмная_энергия",
+	"Большой_взрыв",
+	"Солнечная_система",
+	"Марс",
+	"Юпитер",
+	"Сатурн",
+	"Нептун",
+	"Уран_(планета)",
+	"Венера",
+	"Меркурий_(планета)",
+	"Луна",
+	"Солнце",
+	"Астероид",
+	"Комета",
+	"Метеорит",
+	"Международная_космическая_станция",
+	"Космический_телескоп_Хаббл",
+	"Космический_телескоп_Джеймса_Уэбба",
+	"Аполлон-11",
+	"SpaceX",
+	"Экзопланета",
+	"Туманность_Андромеды",
+	"Галактика",
+	"Галактика_Андромеды",
+	"Квазар",
+	"Пульсар",
+	"Гравитационные_волны",
+	"Горизонт_событий",
+	"Реликтовое_излучение",
+	"Вояджер-1",
+	"Плутон",
+	"Титан_(спутник_Сатурна)",
+	"Европа_(спутник)",
+	"Ио_(спутник)",
+	"Белый_карлик",
+	"Красный_гигант",
+	"Планетарная_туманность",
+	"Антиматерия",
+	"Магнетар",
+	"Тёмная_туманность",
+	"Орбитальная_станция",
+	"Космическая_скорость",
+	"Звёздная_эволюция",
+	"Главная_последовательность",
+	"Реликтовые_галактики",
+}
+
+type wikiResult struct {
+	Title   string
+	Extract string
+}
+
+// fetchWikiFact — берёт статью с Wikipedia и возвращает первый абзац
+func fetchWikiFact(topic string) (*wikiResult, error) {
+	apiURL := fmt.Sprintf(
+		"https://en.wikipedia.org/api/rest_v1/page/summary/%s",
+		url.PathEscape(topic),
+	)
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("статья не найдена: %s", topic)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("wiki статус: %s (тема: %s)", resp.Status, topic)
+	}
+
+	var result struct {
+		Title   string `json:"title"`
+		Extract string `json:"extract"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	// Берём только первый абзац
+	extract := result.Extract
+	if idx := strings.Index(extract, ""); idx != -1 {
+		extract = extract[:idx]
+	}
+	// Обрезаем если слишком длинно
+	if len([]rune(extract)) > 600 {
+		runes := []rune(extract)[:600]
+		extract = string(runes) + "..."
+	}
+
+	return &wikiResult{Title: result.Title, Extract: extract}, nil
+}
+
+// fetchSpaceFact — находит непоказанный факт о космосе
+func fetchSpaceFact() (string, error) {
+	// Перемешиваем темы случайно
+	topics := make([]string, len(spaceTopics))
+	copy(topics, spaceTopics)
+	rand.Shuffle(len(topics), func(i, j int) { topics[i], topics[j] = topics[j], topics[i] })
+
+	for _, topic := range topics {
+		if isShown(topic) {
+			continue
+		}
+
+		fact, err := fetchWikiFact(topic)
+		if err != nil {
+			log.Printf("[space] ⚠️ пропускаю %s: %v", topic, err)
+			continue
+		}
+
+		// Переводим на русский
+		translated, err := translateToRu(fact.Extract)
+		if err != nil {
+			log.Printf("[space] ⚠️ перевод не удался для %s: %v", topic, err)
+			translated = fact.Extract // оригинал если перевод не вышел
+		}
+
+		markShown(topic)
+		return fmt.Sprintf("🌌 *%s*%s", fact.Title, translated), nil
+	}
+
+	// Все факты исчерпаны — сбрасываем и начинаем заново
+	log.Println("[space] 🔄 все факты показаны, сбрасываю базу")
+	resetShown()
+	return "🌌 Все факты о космосе показаны! Начинаем по новому кругу 🚀", nil
 }
 
 // -------------------------------------------------------
