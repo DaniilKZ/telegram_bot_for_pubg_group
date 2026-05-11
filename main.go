@@ -338,7 +338,7 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
-		hour: 15, minute: 0, name: "cat",
+		hour: 14, minute: 0, name: "cat",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			fact, err := fetchCatFact()
 			if err != nil {
@@ -349,13 +349,7 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
-		hour: 19, minute: 0, name: "meme",
-		run: func(bot *tgbotapi.BotAPI, chatID int64) {
-			sendMeme(bot, chatID)
-		},
-	},
-	{
-		hour: 18, minute: 0, name: "space",
+		hour: 15, minute: 0, name: "space",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			text, err := fetchSpaceFact()
 			if err != nil {
@@ -365,6 +359,12 @@ var cronSchedule = []cronTask{
 			msg := tgbotapi.NewMessage(chatID, text)
 			msg.ParseMode = "Markdown"
 			bot.Send(msg)
+		},
+	},
+	{
+		hour: 19, minute: 0, name: "meme",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			sendMeme(bot, chatID)
 		},
 	},
 	{
@@ -694,56 +694,56 @@ func resetShown() {
 // Список тем о космосе — русская Wikipedia
 // Используем точные названия статей (без дизамбигов)
 var spaceTopics = []string{
-	"Млечный_путь",
-	"Чёрная_дыра",
-	"Нейтронная_звезда",
-	"Сверхновая",
-	"Тёмная_материя",
-	"Тёмная_энергия",
-	"Большой_взрыв",
-	"Солнечная_система",
-	"Марс",
-	"Юпитер",
-	"Сатурн",
-	"Нептун",
-	"Уран_(планета)",
-	"Венера",
-	"Меркурий_(планета)",
-	"Луна",
-	"Солнце",
-	"Астероид",
-	"Комета",
-	"Метеорит",
-	"Международная_космическая_станция",
-	"Космический_телескоп_Хаббл",
-	"Космический_телескоп_Джеймса_Уэбба",
-	"Аполлон-11",
+	"Milky Way",
+	"Black hole",
+	"Neutron star",
+	"Supernova",
+	"Dark matter",
+	"Dark energy",
+	"Big Bang",
+	"Solar System",
+	"Mars",
+	"Jupiter",
+	"Saturn",
+	"Neptune",
+	"Uranus",
+	"Venus",
+	"Mercury",
+	"Moon",
+	"Sun",
+	"Asteroid",
+	"Comet",
+	"Meteorite",
+	"International Space Station",
+	"Hubble Space Telescope",
+	"James Webb Space Telescope",
+	"Apollo 11",
 	"SpaceX",
-	"Экзопланета",
-	"Туманность_Андромеды",
-	"Галактика",
-	"Галактика_Андромеды",
-	"Квазар",
-	"Пульсар",
-	"Гравитационные_волны",
-	"Горизонт_событий",
-	"Реликтовое_излучение",
-	"Вояджер-1",
-	"Плутон",
-	"Титан_(спутник_Сатурна)",
-	"Европа_(спутник)",
-	"Ио_(спутник)",
-	"Белый_карлик",
-	"Красный_гигант",
-	"Планетарная_туманность",
-	"Антиматерия",
-	"Магнетар",
-	"Тёмная_туманность",
-	"Орбитальная_станция",
-	"Космическая_скорость",
-	"Звёздная_эволюция",
-	"Главная_последовательность",
-	"Реликтовые_галактики",
+	"Exoplanet",
+	"Andromeda Nebula",
+	"Galaxy",
+	"Andromeda Galaxy",
+	"Quasar",
+	"Pulsar",
+	"Gravitational wave",
+	"Event horizon",
+	"Cosmic microwave background",
+	"Voyager 1",
+	"Pluto",
+	"Titan (moon)",
+	"Europa (moon)",
+	"Io (moon)",
+	"White dwarf",
+	"Red giant",
+	"Planetary nebula",
+	"Antimatter",
+	"Magnetar",
+	"Dark nebula",
+	"Space station",
+	"Escape velocity",
+	"Stellar evolution",
+	"Main sequence",
+	"Relic galaxy",
 }
 
 type wikiResult struct {
@@ -753,11 +753,29 @@ type wikiResult struct {
 
 // fetchWikiFact — берёт статью с Wikipedia и возвращает первый абзац
 func fetchWikiFact(topic string) (*wikiResult, error) {
+	log.Printf("TOPIC = %#v", topic)
+
+	topic = strings.TrimSpace(topic)
+
+	log.Printf("TOPIC = %#v", topic)
+
 	apiURL := fmt.Sprintf(
 		"https://en.wikipedia.org/api/rest_v1/page/summary/%s",
 		url.PathEscape(topic),
 	)
-	resp, err := http.Get(apiURL)
+
+	client := &http.Client{}
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// ОБЯЗАТЕЛЬНО
+	req.Header.Set("User-Agent", "SpaceFactsBot/1.0 (https://t.me/your_bot)")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -766,30 +784,45 @@ func fetchWikiFact(topic string) (*wikiResult, error) {
 	if resp.StatusCode == 404 {
 		return nil, fmt.Errorf("статья не найдена: %s", topic)
 	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("wiki статус: %s (тема: %s)", resp.Status, topic)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf(
+			"wiki статус: %s | body: %s",
+			resp.Status,
+			string(body),
+		)
 	}
 
 	var result struct {
 		Title   string `json:"title"`
 		Extract string `json:"extract"`
 	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	// Берём только первый абзац
 	extract := result.Extract
-	if idx := strings.Index(extract, ""); idx != -1 {
+
+	// У тебя тут ошибка:
+	// strings.Index(extract, "")
+	// всегда возвращает 0
+
+	// Например:
+	if idx := strings.Index(extract, "\n"); idx != -1 {
 		extract = extract[:idx]
 	}
-	// Обрезаем если слишком длинно
+
 	if len([]rune(extract)) > 600 {
 		runes := []rune(extract)[:600]
 		extract = string(runes) + "..."
 	}
 
-	return &wikiResult{Title: result.Title, Extract: extract}, nil
+	return &wikiResult{
+		Title:   result.Title,
+		Extract: extract,
+	}, nil
 }
 
 // fetchSpaceFact — находит непоказанный факт о космосе
@@ -818,7 +851,7 @@ func fetchSpaceFact() (string, error) {
 		}
 
 		markShown(topic)
-		return fmt.Sprintf("🌌 *%s*%s", fact.Title, translated), nil
+		return fmt.Sprintf("🌌 Время факта о космосе: \n\n *%s / *%s \n\n P.S. Especially for Michael", fact.Title, translated), nil
 	}
 
 	// Все факты исчерпаны — сбрасываем и начинаем заново
