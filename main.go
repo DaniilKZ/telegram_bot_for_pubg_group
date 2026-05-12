@@ -304,6 +304,208 @@ func sendMeme(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 // -------------------------------------------------------
+// PUBG Mobile News
+// -------------------------------------------------------
+
+type pubgNews struct {
+	ID    string
+	Title string
+	Time  string
+	Image string
+	Link  string
+}
+
+func fetchPubgNews() (*pubgNews, error) {
+	apiURL := "https://publicfaas.vasdgame.com/hw/backendapi/?namespace=Faas&fn=getPubgmSection&useSign=1&service=pubgmobile&pdr_appid=3157&env=prod&cluster=sg&sign=4004fd36361332ac5eb1f5dda457fb49"
+
+	body := `{
+		"userId":"1",
+		"sectionType":"3",
+		"contentPlat":"h5",
+		"type":["3","4","5","6"],
+		"lang":["ru"],
+		"sortBy":"timeDesc",
+		"offset":0,
+		"limit":8,
+		"sectionId":["91088"],
+		"use_default_lang":false
+	}`
+
+	req, err := http.NewRequest("POST", apiURL, strings.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("new request: %w", err)
+	}
+
+	// ---------------- HEADERS ----------------
+
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://www.pubgmobile.com")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Priority", "u=1, i")
+
+	req.Header.Set("Referer", "https://www.pubgmobile.com/")
+
+	req.Header.Set(
+		"Sec-CH-UA",
+		`"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"`,
+	)
+
+	req.Header.Set("Sec-CH-UA-Mobile", "?0")
+	req.Header.Set("Sec-CH-UA-Platform", `"Windows"`)
+
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+
+	req.Header.Set(
+		"User-Agent",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+	)
+
+	req.Header.Set("X-Pandora-Env", "PROD")
+
+	// ---------------- CLIENT ----------------
+
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// ---------------- BODY ----------------
+
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	log.Printf("[pubg] status=%s", resp.Status)
+	log.Printf("[pubg] body=%s", string(rawBody))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	// ---------------- JSON ----------------
+
+	var result struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+
+		Data struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+
+			Data struct {
+				Count int `json:"count"`
+
+				List []struct {
+					ID            string   `json:"_id"`
+					Title         string   `json:"title"`
+					CreateTime    string   `json:"createTime"`
+					ContentImages []string `json:"contentImages"`
+					GroupID       string   `json:"groupId"`
+				} `json:"list"`
+			} `json:"data"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(rawBody, &result); err != nil {
+		return nil, fmt.Errorf("decode json: %w", err)
+	}
+
+	if result.Code != 0 {
+		return nil, fmt.Errorf("api error code=%d", result.Code)
+	}
+
+	if len(result.Data.Data.List) == 0 {
+		return nil, fmt.Errorf("empty news list")
+	}
+
+	item := result.Data.Data.List[0]
+
+	// ---------------- IMAGE ----------------
+
+	image := ""
+	if len(item.ContentImages) > 0 {
+		image = item.ContentImages[0]
+	}
+
+	// ---------------- REDIS ----------------
+
+	rdb := getRedis()
+	if rdb != nil {
+		key := "pubg:news:" + item.ID
+
+		val, _ := rdb.Get(ctx, key).Result()
+		if val == "shown" {
+			log.Printf("[pubg] already shown: %s", item.ID)
+			return nil, fmt.Errorf("already shown")
+		}
+
+		rdb.Set(ctx, key, "shown", 0)
+		log.Printf("[pubg] saved news id: %s", item.ID)
+	}
+
+	// ---------------- LINK ----------------
+
+	link := fmt.Sprintf(
+		"https://www.pubgmobile.com/ru/news_detail/%s.shtml",
+		item.GroupID,
+	)
+
+	return &pubgNews{
+		ID:    item.ID,
+		Title: item.Title,
+		Time:  item.CreateTime,
+		Image: image,
+		Link:  link,
+	}, nil
+}
+
+func sendPubgNews(bot *tgbotapi.BotAPI, chatID int64) {
+	news, err := fetchPubgNews()
+	if err != nil {
+		log.Printf("[pubg] ❌ %v", err)
+		return
+	}
+
+	text := fmt.Sprintf(
+		"🎮 Новость PUBG Mobile\n\n%s\n\n🕐 %s\n\n🔗 [Читать подробнее](%s)",
+		news.Title,
+		news.Time,
+		news.Link,
+	)
+
+	// Если есть картинка — отправляем фото
+	if news.Image != "" {
+		imgData, err := downloadImage(news.Image)
+		if err == nil {
+			photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileBytes{Name: "pubg.jpg", Bytes: imgData})
+			photo.Caption = text
+			photo.ParseMode = "Markdown"
+			if _, err := bot.Send(photo); err == nil {
+				log.Printf("[pubg] ✅ отправлено с фото: %s", news.Title)
+				return
+			}
+		}
+	}
+
+	// Fallback — только текст
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = "Markdown"
+	bot.Send(msg)
+	log.Printf("[pubg] ✅ отправлено текстом: %s", news.Title)
+}
+
+// -------------------------------------------------------
 // Единый Cron — один URL, всё расписание внутри
 // -------------------------------------------------------
 
@@ -324,6 +526,12 @@ var cronSchedule = []cronTask{
 			day := int(now.Weekday())
 			_, week := now.ISOWeek()
 			sendText(bot, chatID, morningMessages[day][week%4])
+		},
+	},
+	{
+		hour: 21, minute: 0, name: "pubg",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			sendPubgNews(bot, chatID)
 		},
 	},
 	{
@@ -490,6 +698,11 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		} else {
 			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
 		}
+	}
+
+	// /pubg — последняя новость PUBG Mobile
+	if msg.IsCommand() && msg.Command() == "pubg" {
+		sendPubgNews(bot, chatID)
 	}
 
 	// /space — факт о космосе
