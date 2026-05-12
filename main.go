@@ -529,7 +529,7 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
-		hour: 21, minute: 0, name: "pubg",
+		hour: 9, minute: 0, name: "pubg",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			sendPubgNews(bot, chatID)
 		},
