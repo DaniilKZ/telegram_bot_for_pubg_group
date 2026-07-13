@@ -1020,13 +1020,17 @@ func generateFactsFromWeapons() {
 		// Получаем тип оружия с эмодзи
 		weaponTypeEmoji := getWeaponTypeEmoji(weapon.Type)
 
-		// Начинаем формировать описание
-		description := fmt.Sprintf(
-			"*%s* — это %s, использующая патроны *%s*.",
-			weapon.Name,
-			weapon.Type,
-			weapon.Ammo,
-		)
+		description := ""
+
+		if weapon.Ammo != "" {
+			// Начинаем формировать описание
+			description += fmt.Sprintf(
+				"*%s* — это %s, использующая патроны *%s*.",
+				weapon.Name,
+				weapon.Type,
+				weapon.Ammo,
+			)
+		}
 
 		// Добавляем информацию о магазине, только если он > 0
 		if weapon.Magazine > 0 {
@@ -1197,7 +1201,7 @@ func formatWeaponFact(fact WeaponFact) string {
 
 	// 1. Заголовок
 	builder.WriteString(fmt.Sprintf("*%s*\n", fact.Title))
-	builder.WriteString("────────────────────\n\n")
+	builder.WriteString("────────────────────\n")
 
 	// 2. Описание
 	builder.WriteString(fact.Content)
