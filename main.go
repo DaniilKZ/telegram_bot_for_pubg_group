@@ -556,14 +556,6 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
-		hour:   15,
-		minute: 0,
-		name:   "weapon",
-		run: func(bot *tgbotapi.BotAPI, chatID int64) {
-
-		},
-	},
-	{
 		hour: 15, minute: 0, name: "weapon",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			text, imageURL, err := fetchWeaponFact(chatID)
