@@ -1441,13 +1441,12 @@ func main() {
 
 	loadEnv(".env")
 
-	// Загружаем данные об оружии из JSON файла
-	err := LoadWeaponsFromFile("files/weapons.json")
-	if err != nil {
-		log.Printf("[main] ⚠️ Не удалось загрузить файл оружия: %v", err)
-		log.Printf("[main] ℹ️ Бот будет работать без фактов об оружии")
-	} else {
-		log.Printf("[main] ✅ Факты об оружии загружены успешно")
+	paths := []string{"weapons.json", "./weapons.json", "/var/task/weapons.json"}
+	for _, p := range paths {
+		if err := LoadWeaponsFromFile(p); err == nil {
+			log.Printf("[main] ✅ Факты об оружии загружены успешно")
+			break
+		}
 	}
 
 	bot, err := getBot()
