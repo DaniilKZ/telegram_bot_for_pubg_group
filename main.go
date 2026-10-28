@@ -78,6 +78,29 @@ func (g *cronGuard) allow(name string, minInterval time.Duration) bool {
 	return true
 }
 
+type Birthday struct {
+	Day      int
+	Month    time.Month
+	Name     string
+	Location *time.Location
+}
+
+var birthdays = []Birthday{
+	{8, time.September, "Александр Ludaman", time.FixedZone("UTC+5", 5*60*60)},
+	{17, time.October, "Мага Уфа", time.FixedZone("UTC+3", 3*60*60)},
+	{3, time.August, "Дина", time.FixedZone("UTC+5", 5*60*60)},
+	{15, time.May, "Броок", time.FixedZone("UTC+5", 5*60*60)},
+	{27, time.July, "Россия", time.FixedZone("UTC+3", 3*60*60)},
+	{27, time.September, "Надя", time.FixedZone("UTC+3", 3*60*60)},
+	{2, time.May, "Руся", time.FixedZone("UTC+5", 5*60*60)},
+	{17, time.March, "Майкл", time.FixedZone("UTC+5", 5*60*60)},
+	{2, time.July, "Баха", time.FixedZone("UTC+5", 5*60*60)},
+	{2, time.July, "Доник", time.FixedZone("UTC+5", 5*60*60)},
+	{25, time.April, "Яночка", time.FixedZone("UTC+5", 5*60*60)},
+	{20, time.January, "Катя", time.FixedZone("UTC+3", 3*60*60)},
+	{29, time.October, "Даниил", time.FixedZone("UTC+5", 5*60*60)},
+}
+
 // -------------------------------------------------------
 // Массив утренних сообщений [7 дней][4 варианта]
 // -------------------------------------------------------
@@ -194,6 +217,33 @@ func fetchCatFact() (string, error) {
 		return result.Fact, nil
 	}
 	return translated, nil
+}
+
+func sendBirthdayNotifications(bot *tgbotapi.BotAPI, chatID int64) error {
+	nowUTC := time.Now().UTC()
+	found := false
+
+	for _, birthday := range birthdays {
+		now := nowUTC.In(birthday.Location)
+
+		if now.Day() != birthday.Day || now.Month() != birthday.Month {
+			continue
+		}
+
+		found = true
+
+		sendText(
+			bot,
+			chatID,
+			fmt.Sprintf("С днем рождения %s 🎉", birthday.Name),
+		)
+	}
+
+	if !found {
+		sendText(bot, chatID, "Сегодня дней рождения нет.")
+	}
+
+	return nil
 }
 
 func translateToRu(text string) (string, error) {
@@ -556,6 +606,16 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
+		hour: 0, minute: 0, name: "birthday",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+			err := sendBirthdayNotifications(bot, chatID)
+			if err != nil {
+				log.Printf("[cron/birthday] ❌ %v", err)
+				return
+			}
+		},
+	},
+	{
 		hour: 15, minute: 0, name: "weapon",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			text, imageURL, err := fetchWeaponFact(chatID)
@@ -717,6 +777,17 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
 		} else {
 			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
+		}
+	}
+
+	// /birthday
+	if msg.IsCommand() && msg.Command() == "birthday" {
+		err := sendBirthdayNotifications(bot, chatID)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(
+				chatID,
+				"❌ Не удалось проверить дни рождения: "+err.Error(),
+			))
 		}
 	}
 
