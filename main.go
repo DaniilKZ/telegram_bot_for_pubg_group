@@ -221,7 +221,6 @@ func fetchCatFact() (string, error) {
 
 func sendBirthdayNotifications(bot *tgbotapi.BotAPI, chatID int64) error {
 	nowUTC := time.Now().UTC()
-	found := false
 
 	for _, birthday := range birthdays {
 		now := nowUTC.In(birthday.Location)
@@ -230,17 +229,11 @@ func sendBirthdayNotifications(bot *tgbotapi.BotAPI, chatID int64) error {
 			continue
 		}
 
-		found = true
-
 		sendText(
 			bot,
 			chatID,
 			fmt.Sprintf("С днем рождения %s 🎉", birthday.Name),
 		)
-	}
-
-	if !found {
-		sendText(bot, chatID, "Сегодня дней рождения нет.")
 	}
 
 	return nil
@@ -606,33 +599,58 @@ var cronSchedule = []cronTask{
 		},
 	},
 	{
+		hour: 15, minute: 0, name: "weapon",
+		run: func(bot *tgbotapi.BotAPI, chatID int64) {
+
+			log.Printf("[cron/weapon] 🚀 START")
+
+			text, imageURL, err := fetchWeaponFact(chatID)
+			if err != nil {
+				log.Printf("[cron/weapon] ❌ fetchWeaponFact: %v", err)
+				return
+			}
+
+			log.Printf(
+				"[cron/weapon] ✅ fact received, image=%q, textLen=%d",
+				imageURL,
+				len(text),
+			)
+
+			if imageURL != "" {
+				log.Printf("[cron/weapon] 📷 отправляю фото")
+
+				photoMsg := tgbotapi.NewPhoto(
+					chatID,
+					tgbotapi.FileURL(imageURL),
+				)
+
+				photoMsg.Caption = text
+				photoMsg.ParseMode = "Markdown"
+
+				if _, err := bot.Send(photoMsg); err != nil {
+					log.Printf("[cron/weapon] ❌ ошибка отправки фото: %v", err)
+				}
+
+				return
+			}
+
+			log.Printf("[cron/weapon] 📝 отправляю текст")
+
+			msg := tgbotapi.NewMessage(chatID, text)
+			msg.ParseMode = "Markdown"
+
+			if _, err := bot.Send(msg); err != nil {
+				log.Printf("[cron/weapon] ❌ ошибка отправки текста: %v", err)
+			}
+		},
+	},
+	{
 		hour: 0, minute: 0, name: "birthday",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
 			err := sendBirthdayNotifications(bot, chatID)
 			if err != nil {
 				log.Printf("[cron/birthday] ❌ %v", err)
 				return
-			}
-		},
-	},
-	{
-		hour: 15, minute: 0, name: "weapon",
-		run: func(bot *tgbotapi.BotAPI, chatID int64) {
-			text, imageURL, err := fetchWeaponFact(chatID)
-			if err != nil {
-				log.Printf("[cron/weapon] ❌ %v", err)
-				return
-			}
-
-			if imageURL != "" {
-				photoMsg := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
-				photoMsg.Caption = text
-				photoMsg.ParseMode = "Markdown"
-				bot.Send(photoMsg)
-			} else {
-				msg := tgbotapi.NewMessage(chatID, text)
-				msg.ParseMode = "Markdown"
-				bot.Send(msg)
 			}
 		},
 	},
