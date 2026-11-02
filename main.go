@@ -86,19 +86,19 @@ type Birthday struct {
 }
 
 var birthdays = []Birthday{
-	{8, time.September, "Александр Ludaman", time.FixedZone("UTC+5", 5*60*60)},
-	{17, time.October, "Мага Уфа", time.FixedZone("UTC+3", 3*60*60)},
-	{3, time.August, "Дина", time.FixedZone("UTC+5", 5*60*60)},
-	{15, time.May, "Броок", time.FixedZone("UTC+5", 5*60*60)},
-	{27, time.July, "Россия", time.FixedZone("UTC+3", 3*60*60)},
-	{27, time.September, "Надя", time.FixedZone("UTC+3", 3*60*60)},
-	{2, time.May, "Руся", time.FixedZone("UTC+5", 5*60*60)},
 	{17, time.March, "Майкл", time.FixedZone("UTC+5", 5*60*60)},
+	{25, time.April, "Яночка", time.FixedZone("UTC+5", 5*60*60)},
+	{15, time.May, "Адиль (Брооок)", time.FixedZone("UTC+5", 5*60*60)},
+	{2, time.May, "Руся", time.FixedZone("UTC+5", 5*60*60)},
+	{27, time.July, "(Лион)", time.FixedZone("UTC+3", 3*60*60)},
 	{2, time.July, "Баха", time.FixedZone("UTC+5", 5*60*60)},
 	{2, time.July, "Доник", time.FixedZone("UTC+5", 5*60*60)},
-	{25, time.April, "Яночка", time.FixedZone("UTC+5", 5*60*60)},
-	{20, time.January, "Катя", time.FixedZone("UTC+3", 3*60*60)},
+	{3, time.August, "Дина", time.FixedZone("UTC+5", 5*60*60)},
+	{8, time.September, "Александр, Санечка, Санёк, Сайлендблок, Салиноид, Саня, Саша, Шурик, Сашок, Сашка, Сошка", time.FixedZone("UTC+5", 5*60*60)},
+	{27, time.September, "Надя", time.FixedZone("UTC+4", 3*60*60)},
 	{29, time.October, "Даниил", time.FixedZone("UTC+5", 5*60*60)},
+	{17, time.October, "Алмас (Мага)", time.FixedZone("UTC+3", 3*60*60)},
+	{20, time.January, "Катя", time.FixedZone("UTC+3", 3*60*60)},
 }
 
 // -------------------------------------------------------
@@ -180,45 +180,114 @@ func sendText(bot *tgbotapi.BotAPI, chatID int64, text string) error {
 }
 
 func fetchQuote() (string, string, error) {
-	resp, err := http.Get("https://api.forismatic.com/api/1.0/?method=getQuote&format=json&lang=ru")
+	resp, err := http.Get("https://stoic.tekloon.net/stoic-quote")
 	if err != nil {
 		return "", "", err
 	}
 	defer resp.Body.Close()
-	var result struct {
-		QuoteText   string `json:"quoteText"`
-		QuoteAuthor string `json:"quoteAuthor"`
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("quote API status: %s", resp.Status)
 	}
+
+	var result struct {
+		Data struct {
+			QuoteText   string `json:"quote"`
+			QuoteAuthor string `json:"author"`
+		} `json:"data"`
+	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", "", err
 	}
-	if result.QuoteAuthor == "" {
-		result.QuoteAuthor = "Неизвестный автор"
+
+	if result.Data.QuoteAuthor == "" {
+		result.Data.QuoteAuthor = "Неизвестный автор"
 	}
-	return result.QuoteText, result.QuoteAuthor, nil
+
+	translated, err := translateToRu(result.Data.QuoteText)
+	if err != nil {
+		log.Printf("[quote] ошибка перевода: %v", err)
+
+		// Если перевод не удался — возвращаем оригинал
+		return result.Data.QuoteText, result.Data.QuoteAuthor, nil
+	}
+
+	return translated, result.Data.QuoteAuthor, nil
 }
 
-func fetchCatFact() (string, error) {
-	resp, err := http.Get("https://catfact.ninja/fact")
+/*
+	func fetchCatFact() (string, error) {
+		resp, err := http.Get("https://catfact.ninja/fact")
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Fact string `json:"fact"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return "", err
+		}
+
+		translated, err := translateToRu(result.Fact)
+		if err != nil {
+			return result.Fact, nil
+		}
+		return translated, nil
+	}
+
+
+*/
+
+func translateToRu(text string) (string, error) {
+	reqURL := fmt.Sprintf(
+		"https://api.mymemory.translated.net/get?q=%s&langpair=en|ru",
+		url.QueryEscape(text),
+	)
+
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Fact string `json:"fact"`
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("translate status: %s", resp.Status)
 	}
+
+	var result struct {
+		ResponseData struct {
+			TranslatedText string `json:"translatedText"`
+		} `json:"responseData"`
+		ResponseStatus int `json:"responseStatus"`
+	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
 
-	translated, err := translateToRu(result.Fact)
-	if err != nil {
-		return result.Fact, nil
+	if result.ResponseStatus != 200 {
+		return "", fmt.Errorf(
+			"translate response status: %d",
+			result.ResponseStatus,
+		)
 	}
-	return translated, nil
-}
 
+	if result.ResponseData.TranslatedText == "" {
+		return "", fmt.Errorf("пустой перевод")
+	}
+
+	return result.ResponseData.TranslatedText, nil
+}
 func sendBirthdayNotifications(bot *tgbotapi.BotAPI, chatID int64) error {
 	nowUTC := time.Now().UTC()
 
@@ -237,44 +306,6 @@ func sendBirthdayNotifications(bot *tgbotapi.BotAPI, chatID int64) error {
 	}
 
 	return nil
-}
-
-func translateToRu(text string) (string, error) {
-	reqURL := fmt.Sprintf(
-		"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t&q=%s",
-		url.QueryEscape(text),
-	)
-	resp, err := http.Get(reqURL)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	log.Printf("[translate] статус: %s", resp.Status)
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("статус: %s", resp.Status)
-	}
-
-	var raw []interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return "", err
-	}
-
-	translated := ""
-	if sentences, ok := raw[0].([]interface{}); ok {
-		for _, sentence := range sentences {
-			if parts, ok := sentence.([]interface{}); ok && len(parts) >= 1 {
-				if t, ok := parts[0].(string); ok && t != "" {
-					translated += t
-				}
-			}
-		}
-	}
-
-	if translated == "" {
-		return "", fmt.Errorf("пустой перевод")
-	}
-	return translated, nil
 }
 
 func fetchMeme() (string, error) {
@@ -587,17 +618,17 @@ var cronSchedule = []cronTask{
 			sendText(bot, chatID, fmt.Sprintf("🍽 Обеденная цитата:\n\n\u201c%s\u201d\n\n© %s", q, a))
 		},
 	},
-	{
-		hour: 14, minute: 0, name: "cat",
-		run: func(bot *tgbotapi.BotAPI, chatID int64) {
-			fact, err := fetchCatFact()
-			if err != nil {
-				log.Printf("[cron/cat] ❌ %v", err)
-				return
-			}
-			sendText(bot, chatID, "🐱 Факт о котиках:\n\n"+fact)
-		},
-	},
+	//{
+	//	hour: 14, minute: 0, name: "cat",
+	//	run: func(bot *tgbotapi.BotAPI, chatID int64) {
+	//		fact, err := fetchCatFact()
+	//		if err != nil {
+	//			log.Printf("[cron/cat] ❌ %v", err)
+	//			return
+	//		}
+	//		sendText(bot, chatID, "🐱 Факт о котиках:\n\n"+fact)
+	//	},
+	//},
 	{
 		hour: 15, minute: 0, name: "weapon",
 		run: func(bot *tgbotapi.BotAPI, chatID int64) {
@@ -777,6 +808,9 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	if msg.IsCommand() && msg.Command() == "quote" {
 		q, a, err := fetchQuote()
 		if err != nil {
+
+			log.Printf("[цитат] ❌ %v", err)
+
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить цитату"))
 		} else {
 			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("\u201c%s\u201d\n\n© %s", q, a)))
@@ -789,14 +823,14 @@ func processMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	}
 
 	// /cat
-	if msg.IsCommand() && msg.Command() == "cat" {
+	/*	if msg.IsCommand() && msg.Command() == "cat" {
 		fact, err := fetchCatFact()
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "❌ Не удалось получить факт о кошке"))
 		} else {
 			bot.Send(tgbotapi.NewMessage(chatID, "🐱 Факт о котиках:\n\n"+fact))
 		}
-	}
+	}*/
 
 	// /birthday
 	if msg.IsCommand() && msg.Command() == "birthday" {
@@ -1526,6 +1560,9 @@ func main() {
 	for _, p := range paths {
 		if err := LoadWeaponsFromFile(p); err == nil {
 			log.Printf("[main] ✅ Факты об оружии загружены успешно")
+			break
+		} else {
+			log.Printf("[main] ❌ Факты об оружии НЕ загружены %v", err)
 			break
 		}
 	}
