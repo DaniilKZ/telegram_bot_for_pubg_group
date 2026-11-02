@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -1067,7 +1068,11 @@ func getRedis() *redis.Client {
 // Факты об оружии  PUBG
 // -------------------------------------------------------
 
-// WeaponData - структура оружия из вашего JSON
+// ============================================================
+// WEAPON STRUCTURES
+// ============================================================
+
+// WeaponData - структура оружия из weapons.json.
 type WeaponData struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"name"`
@@ -1080,115 +1085,218 @@ type WeaponData struct {
 	Disadvantages string   `json:"disadvantages"`
 	Maps          []string `json:"maps"`
 	Accessories   []string `json:"accessories"`
-	Power         int      `json:"power"`
-	FireRate      int      `json:"fire_rate"`
-	Reload        int      `json:"reload"`
-	Range         int      `json:"range"`
-	Stability     int      `json:"stability"`
+
+	Power     int `json:"power"`
+	FireRate  int `json:"fire_rate"`
+	Reload    int `json:"reload"`
+	Range     int `json:"range"`
+	Stability int `json:"stability"`
 }
 
-// WeaponFact - структура факта об оружии
+// WeaponFact - готовый факт об оружии.
 type WeaponFact struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	Weapon    string `json:"weapon"`
-	Type      string `json:"type"`
-	Stats     string `json:"stats"`
-	ImageURL  string `json:"image_url"`
-	Power     int    `json:"power"`
-	FireRate  int    `json:"fire_rate"`
-	Reload    int    `json:"reload"`
-	Range     int    `json:"range"`
-	Stability int    `json:"stability"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+
+	Weapon   string `json:"weapon"`
+	Type     string `json:"type"`
+	Stats    string `json:"stats"`
+	ImageURL string `json:"image_url"`
+
+	Power     int `json:"power"`
+	FireRate  int `json:"fire_rate"`
+	Reload    int `json:"reload"`
+	Range     int `json:"range"`
+	Stability int `json:"stability"`
 }
+
+// ============================================================
+// GLOBAL DATA
+// ============================================================
 
 var (
 	weaponFacts []WeaponFact
 	weaponsData []WeaponData
 )
 
-// LoadWeaponsFromFile - загружает данные оружия из JSON файла
-func LoadWeaponsFromFile(filepath string) error {
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		return fmt.Errorf("ошибка чтения файла: %v", err)
+// ============================================================
+// LOAD WEAPONS
+// ============================================================
+
+// LoadWeapons загружает weapons.json,
+// встроенный в бинарник через go:embed.
+func LoadWeapons() error {
+	if len(weaponsJSON) == 0 {
+		return fmt.Errorf("weapons.json пустой")
 	}
 
-	err = json.Unmarshal(data, &weaponsData)
-	if err != nil {
-		return fmt.Errorf("ошибка парсинга JSON: %v", err)
+	// Очищаем старые данные перед загрузкой.
+	weaponsData = nil
+	weaponFacts = nil
+
+	if err := json.Unmarshal(weaponsJSON, &weaponsData); err != nil {
+		return fmt.Errorf("ошибка парсинга weapons.json: %w", err)
 	}
 
-	log.Printf("[weapon_facts] ✅ Загружено %d единиц оружия из %s", len(weaponsData), filepath)
+	if len(weaponsData) == 0 {
+		return fmt.Errorf("weapons.json не содержит оружия")
+	}
+
+	log.Printf(
+		"[weapon_facts] 📦 Загружено %d единиц оружия",
+		len(weaponsData),
+	)
 
 	generateFactsFromWeapons()
+
+	if len(weaponFacts) == 0 {
+		return fmt.Errorf("после генерации получилось 0 фактов")
+	}
+
 	return nil
 }
 
-// generateFactsFromWeapons - генерирует факты на основе данных оружия
-// generateFactsFromWeapons - генерирует факты на основе данных оружия
+// ============================================================
+// GENERATE FACTS
+// ============================================================
+
+// generateFactsFromWeapons генерирует факты
+// на основе данных из weapons.json.
 func generateFactsFromWeapons() {
-	weaponFacts = []WeaponFact{}
+	weaponFacts = make([]WeaponFact, 0)
 
 	for _, weapon := range weaponsData {
-		// Получаем тип оружия с эмодзи
+
+		// ----------------------------------------------------
+		// Тип оружия
+		// ----------------------------------------------------
+
 		weaponTypeEmoji := getWeaponTypeEmoji(weapon.Type)
+
+		// ----------------------------------------------------
+		// Описание
+		// ----------------------------------------------------
 
 		description := ""
 
 		if weapon.Ammo != "" {
-			// Начинаем формировать описание
 			description += fmt.Sprintf(
 				"*%s* — это %s, использующая патроны *%s*.",
 				weapon.Name,
 				weapon.Type,
 				weapon.Ammo,
 			)
+		} else {
+			description += fmt.Sprintf(
+				"*%s* — это %s.",
+				weapon.Name,
+				weapon.Type,
+			)
 		}
 
-		// Добавляем информацию о магазине, только если он > 0
+		// ----------------------------------------------------
+		// Магазин
+		// ----------------------------------------------------
+
 		if weapon.Magazine > 0 {
-			description += fmt.Sprintf("\n\n• Магазин: *%d* патронов", weapon.Magazine)
+			description += fmt.Sprintf(
+				"\n\n• Магазин: *%d* патронов",
+				weapon.Magazine,
+			)
 		}
 
-		// Добавляем режим стрельбы
+		// ----------------------------------------------------
+		// Режим стрельбы
+		// ----------------------------------------------------
+
 		fireModeText := getFireModeText(weapon.FireMode)
-		description += fmt.Sprintf("\n• Режим стрельбы: *%s*", fireModeText)
 
-		// Добавляем карты, если они есть
+		if fireModeText != "" {
+			description += fmt.Sprintf(
+				"\n• Режим стрельбы: *%s*",
+				fireModeText,
+			)
+		}
+
+		// ----------------------------------------------------
+		// Карты
+		// ----------------------------------------------------
+
 		if len(weapon.Maps) > 0 {
-			description += fmt.Sprintf("\n• Доступна на картах: *%s*", strings.Join(weapon.Maps, "*, *"))
+			description += fmt.Sprintf(
+				"\n• Доступна на картах: *%s*",
+				strings.Join(weapon.Maps, "*, *"),
+			)
 		}
 
-		// Если есть преимущества
+		// ----------------------------------------------------
+		// Преимущества
+		// ----------------------------------------------------
+
 		if weapon.Advantages != "" {
-			description += fmt.Sprintf("\n\n✅ *Преимущества:*\n%s", weapon.Advantages)
+			description += fmt.Sprintf(
+				"\n\n✅ *Преимущества:*\n%s",
+				weapon.Advantages,
+			)
 		}
 
-		// Если есть недостатки
+		// ----------------------------------------------------
+		// Недостатки
+		// ----------------------------------------------------
+
 		if weapon.Disadvantages != "" {
-			description += fmt.Sprintf("\n\n⚠️ *Недостатки:*\n%s", weapon.Disadvantages)
+			description += fmt.Sprintf(
+				"\n\n⚠️ *Недостатки:*\n%s",
+				weapon.Disadvantages,
+			)
 		}
+
+		// ----------------------------------------------------
+		// Основной факт
+		// ----------------------------------------------------
 
 		fact := WeaponFact{
-			ID:        fmt.Sprintf("%s_fact1", weapon.ID),
-			Title:     fmt.Sprintf("%s %s", weaponTypeEmoji, weapon.Name),
-			Content:   description,
-			Weapon:    weapon.Name,
-			Type:      weapon.Type,
-			ImageURL:  weapon.Image,
+			ID: fmt.Sprintf(
+				"%s_fact1",
+				weapon.ID,
+			),
+
+			Title: fmt.Sprintf(
+				"%s %s",
+				weaponTypeEmoji,
+				weapon.Name,
+			),
+
+			Content: description,
+
+			Weapon:   weapon.Name,
+			Type:     weapon.Type,
+			ImageURL: weapon.Image,
+
 			Power:     weapon.Power,
 			FireRate:  weapon.FireRate,
 			Reload:    weapon.Reload,
 			Range:     weapon.Range,
 			Stability: weapon.Stability,
 		}
-		weaponFacts = append(weaponFacts, fact)
 
-		// Факт про обвесы (если есть)
+		weaponFacts = append(
+			weaponFacts,
+			fact,
+		)
+
+		// ----------------------------------------------------
+		// Факт про обвесы
+		// ----------------------------------------------------
+
 		if len(weapon.Accessories) > 0 {
-			accessoriesList := strings.Join(weapon.Accessories, "\n• ")
+
+			accessoriesList := strings.Join(
+				weapon.Accessories,
+				"\n• ",
+			)
+
 			content2 := fmt.Sprintf(
 				"*%s* поддерживает установку следующего снаряжения:\n\n• %s",
 				weapon.Name,
@@ -1196,174 +1304,384 @@ func generateFactsFromWeapons() {
 			)
 
 			fact2 := WeaponFact{
-				ID:        fmt.Sprintf("%s_fact2", weapon.ID),
-				Title:     fmt.Sprintf("🔧 Снаряжение для %s", weapon.Name),
-				Content:   content2,
-				Weapon:    weapon.Name,
-				Type:      weapon.Type,
-				ImageURL:  weapon.Image,
+				ID: fmt.Sprintf(
+					"%s_fact2",
+					weapon.ID,
+				),
+
+				Title: fmt.Sprintf(
+					"🔧 Снаряжение для %s",
+					weapon.Name,
+				),
+
+				Content: content2,
+
+				Weapon:   weapon.Name,
+				Type:     weapon.Type,
+				ImageURL: weapon.Image,
+
 				Power:     weapon.Power,
 				FireRate:  weapon.FireRate,
 				Reload:    weapon.Reload,
 				Range:     weapon.Range,
 				Stability: weapon.Stability,
 			}
-			weaponFacts = append(weaponFacts, fact2)
+
+			weaponFacts = append(
+				weaponFacts,
+				fact2,
+			)
 		}
 	}
 
-	log.Printf("[weapon_facts] ✅ Сгенерировано %d фактов об оружии", len(weaponFacts))
+	log.Printf(
+		"[weapon_facts] ✅ Сгенерировано %d фактов об оружии",
+		len(weaponFacts),
+	)
 }
 
-// getWeaponTypeEmoji - возвращает эмодзи для типа оружия
+// ============================================================
+// WEAPON TYPE EMOJI
+// ============================================================
+
 func getWeaponTypeEmoji(weaponType string) string {
 	switch {
 	case strings.Contains(weaponType, "Штурмовая"):
 		return "🔫"
+
 	case strings.Contains(weaponType, "Снайперская"):
 		return "🎯"
+
 	case strings.Contains(weaponType, "Пистолет-пулемет"):
 		return "💨"
+
 	case strings.Contains(weaponType, "Дробовик"):
 		return "💥"
+
 	case strings.Contains(weaponType, "Пулемет"):
 		return "🔥"
+
 	default:
 		return "🔫"
 	}
 }
 
-// getFireModeText - возвращает читаемый текст режима стрельбы
+// ============================================================
+// FIRE MODE
+// ============================================================
+
 func getFireModeText(mode string) string {
 	switch mode {
+
 	case "ОДИНОЧНЫЙ/АВТОМАТИЧЕСКИЙ":
 		return "одиночный и автоматический"
+
 	case "ОДИНОЧНЫЙ/ОЧЕРЕДЬ/АВТОМАТИЧЕСКИЙ":
 		return "одиночный, очередь и автоматический"
+
 	case "ОДИНОЧНЫЙ":
 		return "только одиночный"
+
 	case "АВТОМАТИЧЕСКИЙ":
 		return "автоматический"
+
 	default:
 		return strings.ToLower(mode)
 	}
 }
 
-// getRandomWeaponFact - получает случайный уникальный факт
+// ============================================================
+// RANDOM WEAPON FACT
+// ============================================================
+
 func getRandomWeaponFact(chatID int64) (WeaponFact, error) {
+
 	if len(weaponFacts) == 0 {
-		return WeaponFact{}, fmt.Errorf("нет доступных фактов об оружии")
+		return WeaponFact{}, fmt.Errorf(
+			"нет доступных фактов об оружии",
+		)
 	}
 
 	redisClient := getRedis()
+
+	// --------------------------------------------------------
+	// Redis недоступен
+	// --------------------------------------------------------
+
 	if redisClient == nil {
 		return weaponFacts[rand.Intn(len(weaponFacts))], nil
 	}
 
-	usedKey := fmt.Sprintf("weapon_facts:used:%d", chatID)
+	usedKey := fmt.Sprintf(
+		"weapon_facts:used:%d",
+		chatID,
+	)
 
-	usedIDs, err := redisClient.SMembers(ctx, usedKey).Result()
+	// --------------------------------------------------------
+	// Получаем использованные факты
+	// --------------------------------------------------------
+
+	usedIDs, err := redisClient.
+		SMembers(ctx, usedKey).
+		Result()
+
 	if err != nil {
-		log.Printf("[weapon_facts] ❌ Ошибка получения использованных фактов: %v", err)
+		log.Printf(
+			"[weapon_facts] ❌ Ошибка получения использованных фактов: %v",
+			err,
+		)
+
 		return weaponFacts[rand.Intn(len(weaponFacts))], nil
 	}
 
 	usedMap := make(map[string]bool)
+
 	for _, id := range usedIDs {
 		usedMap[id] = true
 	}
 
+	// --------------------------------------------------------
+	// Все факты уже использованы
+	// --------------------------------------------------------
+
 	if len(usedMap) >= len(weaponFacts) {
-		log.Printf("[weapon_facts] 🔄 Все факты использованы, сбрасываем список для чата %d", chatID)
-		err := redisClient.Del(ctx, usedKey).Err()
-		if err != nil {
-			log.Printf("[weapon_facts] ⚠️ Ошибка сброса: %v", err)
+
+		log.Printf(
+			"[weapon_facts] 🔄 Все факты использованы, сбрасываем список для чата %d",
+			chatID,
+		)
+
+		if err := redisClient.Del(ctx, usedKey).Err(); err != nil {
+			log.Printf(
+				"[weapon_facts] ⚠️ Ошибка сброса: %v",
+				err,
+			)
 		}
+
 		usedMap = make(map[string]bool)
 	}
 
-	var availableFacts []WeaponFact
+	// --------------------------------------------------------
+	// Выбираем доступные факты
+	// --------------------------------------------------------
+
+	availableFacts := make(
+		[]WeaponFact,
+		0,
+		len(weaponFacts),
+	)
+
 	for _, fact := range weaponFacts {
+
 		if !usedMap[fact.ID] {
-			availableFacts = append(availableFacts, fact)
+			availableFacts = append(
+				availableFacts,
+				fact,
+			)
 		}
 	}
 
+	// --------------------------------------------------------
+	// Дополнительная защита
+	// --------------------------------------------------------
+
 	if len(availableFacts) == 0 {
-		err := redisClient.Del(ctx, usedKey).Err()
-		if err != nil {
-			log.Printf("[weapon_facts] ⚠️ Ошибка сброса: %v", err)
+
+		if err := redisClient.Del(ctx, usedKey).Err(); err != nil {
+
+			log.Printf(
+				"[weapon_facts] ⚠️ Ошибка сброса: %v",
+				err,
+			)
+
 			return weaponFacts[rand.Intn(len(weaponFacts))], nil
 		}
+
 		availableFacts = weaponFacts
 	}
 
+	// --------------------------------------------------------
+	// Выбираем случайный факт
+	// --------------------------------------------------------
+
 	selectedFact := availableFacts[rand.Intn(len(availableFacts))]
 
-	err = redisClient.SAdd(ctx, usedKey, selectedFact.ID).Err()
-	if err != nil {
-		log.Printf("[weapon_facts] ⚠️ Ошибка сохранения: %v", err)
+	// --------------------------------------------------------
+	// Сохраняем использованный факт
+	// --------------------------------------------------------
+
+	if err := redisClient.
+		SAdd(ctx, usedKey, selectedFact.ID).
+		Err(); err != nil {
+
+		log.Printf(
+			"[weapon_facts] ⚠️ Ошибка сохранения факта: %v",
+			err,
+		)
 	}
 
-	redisClient.Expire(ctx, usedKey, 24*time.Hour)
+	// --------------------------------------------------------
+	// TTL
+	// --------------------------------------------------------
+
+	if err := redisClient.
+		Expire(ctx, usedKey, 24*time.Hour).
+		Err(); err != nil {
+
+		log.Printf(
+			"[weapon_facts] ⚠️ Ошибка установки TTL: %v",
+			err,
+		)
+	}
 
 	return selectedFact, nil
 }
 
-// formatWeaponFact - форматирует факт для отправки в Telegram
+// ============================================================
+// FORMAT WEAPON FACT
+// ============================================================
+
 func formatWeaponFact(fact WeaponFact) string {
+
 	var builder strings.Builder
 
-	// 1. Заголовок
-	builder.WriteString(fmt.Sprintf("*%s*\n", fact.Title))
-	builder.WriteString("────────────────────\n")
+	// --------------------------------------------------------
+	// Заголовок
+	// --------------------------------------------------------
 
-	// 2. Описание
-	builder.WriteString(fact.Content)
+	builder.WriteString(
+		fmt.Sprintf(
+			"*%s*\n",
+			fact.Title,
+		),
+	)
+
+	builder.WriteString(
+		"────────────────────\n",
+	)
+
+	// --------------------------------------------------------
+	// Описание
+	// --------------------------------------------------------
+
+	builder.WriteString(
+		fact.Content,
+	)
+
 	builder.WriteString("\n\n")
 
-	// 3. Характеристики (ОБЯЗАТЕЛЬНО выводятся!)
-	builder.WriteString("📊 *Характеристики:*\n\n")
+	// --------------------------------------------------------
+	// Характеристики
+	// --------------------------------------------------------
+
+	builder.WriteString(
+		"📊 *Характеристики:*\n\n",
+	)
+
 	builder.WriteString("```\n")
-	builder.WriteString(fmt.Sprintf("💥 Мощность:          %d/100\n", fact.Power))
-	builder.WriteString(fmt.Sprintf("⚡ Скорострельность:  %d/100\n", fact.FireRate))
-	builder.WriteString(fmt.Sprintf("🎯 Стабильность:      %d/100\n", fact.Stability))
-	builder.WriteString(fmt.Sprintf("📏 Дальность:         %d/100\n", fact.Range))
-	builder.WriteString(fmt.Sprintf("🔄 Перезарядка:       %d/100\n", fact.Reload))
+
+	builder.WriteString(
+		fmt.Sprintf(
+			"💥 Мощность:          %d/100\n",
+			fact.Power,
+		),
+	)
+
+	builder.WriteString(
+		fmt.Sprintf(
+			"⚡ Скорострельность:  %d/100\n",
+			fact.FireRate,
+		),
+	)
+
+	builder.WriteString(
+		fmt.Sprintf(
+			"🎯 Стабильность:      %d/100\n",
+			fact.Stability,
+		),
+	)
+
+	builder.WriteString(
+		fmt.Sprintf(
+			"📏 Дальность:         %d/100\n",
+			fact.Range,
+		),
+	)
+
+	builder.WriteString(
+		fmt.Sprintf(
+			"🔄 Перезарядка:       %d/100\n",
+			fact.Reload,
+		),
+	)
+
 	builder.WriteString("```\n\n")
 
 	return builder.String()
 }
 
-// fetchWeaponFact - основная функция для получения факта
+// ============================================================
+// FETCH WEAPON FACT
+// ============================================================
+
 func fetchWeaponFact(chatID int64) (string, string, error) {
+
 	fact, err := getRandomWeaponFact(chatID)
+
 	if err != nil {
 		return "", "", err
 	}
+
 	return formatWeaponFact(fact), fact.ImageURL, nil
 }
 
-// resetWeaponFacts - сбрасывает историю фактов для чата
+// ============================================================
+// RESET WEAPON FACTS
+// ============================================================
+
 func resetWeaponFacts(chatID int64) error {
+
 	redisClient := getRedis()
+
 	if redisClient == nil {
-		return fmt.Errorf("Redis не доступен")
+		return fmt.Errorf(
+			"Redis не доступен",
+		)
 	}
 
-	usedKey := fmt.Sprintf("weapon_facts:used:%d", chatID)
-	return redisClient.Del(ctx, usedKey).Err()
+	usedKey := fmt.Sprintf(
+		"weapon_facts:used:%d",
+		chatID,
+	)
+
+	return redisClient.
+		Del(ctx, usedKey).
+		Err()
 }
 
-// getWeaponFactsStats - получает статистику по фактам
+// ============================================================
+// WEAPON FACTS STATS
+// ============================================================
+
 func getWeaponFactsStats(chatID int64) (int, int, error) {
+
 	redisClient := getRedis()
+
 	if redisClient == nil {
-		return 0, 0, fmt.Errorf("Redis не доступен")
+		return 0, 0, fmt.Errorf(
+			"Redis не доступен",
+		)
 	}
 
-	usedKey := fmt.Sprintf("weapon_facts:used:%d", chatID)
-	usedCount, err := redisClient.SCard(ctx, usedKey).Result()
+	usedKey := fmt.Sprintf(
+		"weapon_facts:used:%d",
+		chatID,
+	)
+
+	usedCount, err := redisClient.
+		SCard(ctx, usedKey).
+		Result()
+
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1372,215 +1690,65 @@ func getWeaponFactsStats(chatID int64) (int, int, error) {
 }
 
 // -------------------------------------------------------
-// Wikipedia Space Facts
-// -------------------------------------------------------
-
-// Список тем о космосе — русская Wikipedia
-// Используем точные названия статей (без дизамбигов)
-/*var spaceTopics = []string{
-	"Milky Way",
-	"Black hole",
-	"Neutron star",
-	"Supernova",
-	"Dark matter",
-	"Dark energy",
-	"Big Bang",
-	"Solar System",
-	"Mars",
-	"Jupiter",
-	"Saturn",
-	"Neptune",
-	"Uranus",
-	"Venus",
-	"Mercury",
-	"Moon",
-	"Sun",
-	"Asteroid",
-	"Comet",
-	"Meteorite",
-	"International Space Station",
-	"Hubble Space Telescope",
-	"James Webb Space Telescope",
-	"Apollo 11",
-	"SpaceX",
-	"Exoplanet",
-	"Andromeda Nebula",
-	"Galaxy",
-	"Andromeda Galaxy",
-	"Quasar",
-	"Pulsar",
-	"Gravitational wave",
-	"Event horizon",
-	"Cosmic microwave background",
-	"Voyager 1",
-	"Pluto",
-	"Titan (moon)",
-	"Europa (moon)",
-	"Io (moon)",
-	"White dwarf",
-	"Red giant",
-	"Planetary nebula",
-	"Antimatter",
-	"Magnetar",
-	"Dark nebula",
-	"Space station",
-	"Escape velocity",
-	"Stellar evolution",
-	"Main sequence",
-	"Relic galaxy",
-}
-*/
-/*type wikiResult struct {
-	Title   string
-	Extract string
-}*/
-
-// fetchWikiFact — берёт статью с Wikipedia и возвращает первый абзац
-/*func fetchWikiFact(topic string) (*wikiResult, error) {
-	log.Printf("TOPIC = %#v", topic)
-
-	topic = strings.TrimSpace(topic)
-
-	log.Printf("TOPIC = %#v", topic)
-
-	apiURL := fmt.Sprintf(
-		"https://en.wikipedia.org/api/rest_v1/page/summary/%s",
-		url.PathEscape(topic),
-	)
-
-	client := &http.Client{}
-
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// ОБЯЗАТЕЛЬНО
-	req.Header.Set("User-Agent", "SpaceFactsBot/1.0 (https://t.me/your_bot)")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("статья не найдена: %s", topic)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(
-			"wiki статус: %s | body: %s",
-			resp.Status,
-			string(body),
-		)
-	}
-
-	var result struct {
-		Title   string `json:"title"`
-		Extract string `json:"extract"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	extract := result.Extract
-
-	// У тебя тут ошибка:
-	// strings.Index(extract, "")
-	// всегда возвращает 0
-
-	// Например:
-	if idx := strings.Index(extract, "\n"); idx != -1 {
-		extract = extract[:idx]
-	}
-
-	if len([]rune(extract)) > 600 {
-		runes := []rune(extract)[:600]
-		extract = string(runes) + "..."
-	}
-
-	return &wikiResult{
-		Title:   result.Title,
-		Extract: extract,
-	}, nil
-}
-*/
-
-/*// fetchSpaceFact — находит непоказанный факт о космосе
-func fetchSpaceFact() (string, error) {
-	// Перемешиваем темы случайно
-	topics := make([]string, len(spaceTopics))
-	copy(topics, spaceTopics)
-	rand.Shuffle(len(topics), func(i, j int) { topics[i], topics[j] = topics[j], topics[i] })
-
-	for _, topic := range topics {
-		if isShown(topic) {
-			continue
-		}
-
-		fact, err := fetchWikiFact(topic)
-		if err != nil {
-			log.Printf("[space] ⚠️ пропускаю %s: %v", topic, err)
-			continue
-		}
-
-		// Переводим на русский
-		translated, err := translateToRu(fact.Extract)
-		if err != nil {
-			log.Printf("[space] ⚠️ перевод не удался для %s: %v", topic, err)
-			translated = fact.Extract // оригинал если перевод не вышел
-		}
-
-		markShown(topic)
-		return fmt.Sprintf("🌌 Время факта о космосе: \n\n *%s / *%s \n\n P.S. Especially for Michael", fact.Title, translated), nil
-	}
-
-	// Все факты исчерпаны — сбрасываем и начинаем заново
-	log.Println("[space] 🔄 все факты показаны, сбрасываю базу")
-	resetShown()
-	return "🌌 Все факты о космосе показаны! Начинаем по новому кругу 🚀", nil
-}
-*/
-// -------------------------------------------------------
 // main
 // -------------------------------------------------------
 
-func main() {
+//go:embed weapons.json
+var weaponsJSON []byte
 
+// ============================================================
+// MAIN
+// ============================================================
+
+func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+
 	log.Println("=== БОТ ЗАПУСКАЕТСЯ ===")
 
 	loadEnv(".env")
 
-	paths := []string{"weapons.json", "./weapons.json", "/var/task/weapons.json"}
-	for _, p := range paths {
-		if err := LoadWeaponsFromFile(p); err == nil {
-			log.Printf("[main] ✅ Факты об оружии загружены успешно")
-			break
-		} else {
-			log.Printf("[main] ❌ Факты об оружии НЕ загружены %v", err)
-			break
-		}
+	// --------------------------------------------------------
+	// Загружаем weapons.json
+	// --------------------------------------------------------
+
+	if err := LoadWeapons(); err != nil {
+		log.Printf("[main] ❌ Факты об оружии НЕ загружены: %v", err)
+	} else {
+		log.Printf(
+			"[main] ✅ Факты об оружии загружены: %d фактов",
+			len(weaponFacts),
+		)
 	}
+
+	// --------------------------------------------------------
+	// Создаём Telegram Bot
+	// --------------------------------------------------------
 
 	bot, err := getBot()
 	if err != nil {
 		log.Fatalf("[main] ❌ бот: %v", err)
 	}
+
 	log.Printf("[main] ✅ бот: @%s", bot.Self.UserName)
+
+	// --------------------------------------------------------
+	// Local
+	// --------------------------------------------------------
 
 	if os.Getenv("LOCAL") == "true" {
 		runPolling(bot)
 		return
 	}
 
+	// --------------------------------------------------------
+	// Vercel HTTP
+	// --------------------------------------------------------
+
 	mux := http.NewServeMux()
+
 	mux.HandleFunc("/api/webhook", handleWebhook)
-	mux.HandleFunc("/api/cron", handleCron) // ← единый cron endpoint
+	mux.HandleFunc("/api/cron", handleCron)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "Bot is running")
 	})
@@ -1589,6 +1757,8 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
+
 	log.Printf("[main] 🌐 сервер на :%s", port)
+
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
